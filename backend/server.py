@@ -3,8 +3,8 @@
 路由：
   GET  /                  -> 前端页面
   GET  /api/health        -> 健康检查
-  GET  /api/settings      -> 读取当前配置（脱敏）
-  POST /api/settings      -> 更新 AI 配置（api_key/model/base_url）
+  GET  /api/settings      -> 读取当前配置（网页 AI + 浏览器连接）
+  POST /api/settings      -> 更新配置（provider/web_url/browser.*）
   POST /api/stage         -> 单阶段执行（compose/arrange/mix/master）
   POST /api/pipeline      -> 完整四阶段流水线
   POST /api/cancel        -> 取消当前任务
@@ -55,8 +55,10 @@ def _build_engines(cfg: dict):
 async def lifespan(app: FastAPI):
     cfg = load_config()
     _build_engines(cfg)
-    log.info("AI 引擎在线: %s", _state["ai"].online)
+    log.info("AI 引擎就绪（网页 AI 模式可用=%s）", _state["ai"].online)
     yield
+    if _state.get("ai"):
+        await _state["ai"].close()
     if _state.get("daw"):
         _state["daw"].close()
 
@@ -101,30 +103,41 @@ async def index():
 # ---------- REST ----------
 @app.get("/api/health")
 async def health():
+    ai = _state.get("ai")
+    browser = _state.get("cfg", {}).get("browser", {})
     return {
         "ok": True,
-        "ai_online": _state["ai"].online if _state.get("ai") else False,
+        "ai_online": ai.online if ai else False,
+        "browser_mode": browser.get("mode", "cdp"),
+        "browser_connected": bool(ai and ai.driver.connected),
         "daw_platform": "macos" if __import__("platform").system() == "Darwin" else "simulated",
     }
 
 
 class SettingsIn(BaseModel):
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
-    model: Optional[str] = None
     provider: Optional[str] = None
-    temperature: Optional[float] = None
+    web_url: Optional[str] = None
+    timeout: Optional[float] = None
+    browser_mode: Optional[str] = None      # cdp | persistent
+    cdp_url: Optional[str] = None
+    user_data_dir: Optional[str] = None
+    headless: Optional[bool] = None
 
 
 @app.get("/api/settings")
 async def get_settings():
     ai = _state.get("cfg", {}).get("ai", {})
+    browser = _state.get("cfg", {}).get("browser", {})
+    engine = _state.get("ai")
     return {
         "provider": ai.get("provider", "doubao"),
-        "base_url": ai.get("base_url", ""),
-        "model": ai.get("model", ""),
-        "has_api_key": bool(ai.get("api_key") and not str(ai.get("api_key")).startswith("YOUR_")),
-        "ai_online": _state["ai"].online if _state.get("ai") else False,
+        "web_url": ai.get("web_url", ""),
+        "timeout": ai.get("timeout", 180),
+        "browser_mode": browser.get("mode", "cdp"),
+        "cdp_url": browser.get("cdp_url", "http://127.0.0.1:9222"),
+        "user_data_dir": browser.get("user_data_dir", "~/.ai-daw-conductor/browser-profile"),
+        "ai_online": engine.online if engine else False,
+        "browser_connected": bool(engine and engine.driver.connected),
     }
 
 
@@ -132,9 +145,17 @@ async def get_settings():
 async def update_settings(s: SettingsIn):
     cfg = load_config()
     ai = cfg.setdefault("ai", {})
-    for k, v in s.model_dump(exclude_none=True).items():
-        ai[k] = v
-    # 重建引擎以应用新配置
+    browser = cfg.setdefault("browser", {})
+    data = s.model_dump(exclude_none=True)
+    for k in ("provider", "web_url", "timeout"):
+        if k in data:
+            ai[k] = data[k]
+    for k in ("browser_mode", "cdp_url", "user_data_dir", "headless"):
+        if k in data:
+            browser[k.replace("browser_", "") if k == "browser_mode" else k] = data[k]
+    # 重建引擎以应用新配置（先关闭旧的浏览器/DAW 连接）
+    if _state.get("ai"):
+        await _state["ai"].close()
     if _state.get("daw"):
         _state["daw"].close()
     _build_engines(cfg)
@@ -197,6 +218,25 @@ async def api_cancel():
     if _current_task and not _current_task.done():
         _current_task.cancel()
     return {"ok": True}
+
+
+@app.post("/api/browser/connect")
+async def api_browser_connect():
+    """连接/复用用户已登录的网页 AI 标签页，返回状态。"""
+    engine = _state.get("ai")
+    if not engine:
+        return {"ok": False, "error": "引擎未初始化"}
+    if not engine.online:
+        return {"ok": False, "error": "Playwright 未安装，请运行 pip install playwright 后再试（demo 模式无需连接）"}
+    try:
+        page = await engine.driver.ensure_page()
+        url = page.url if page else ""
+        await broadcast({"type": "daw_event", "kind": "log", "level": "info",
+                         "message": f"已连接网页 AI 标签页：{url}"})
+        return {"ok": True, "url": url, "provider": engine.driver.provider}
+    except Exception as e:
+        log.exception("浏览器连接失败")
+        return {"ok": False, "error": str(e)}
 
 
 # ---------- WebSocket ----------

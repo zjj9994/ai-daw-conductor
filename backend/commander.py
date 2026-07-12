@@ -66,7 +66,7 @@ class Commander:
         bpm: float = 100.0,
     ) -> StageResult:
         await self.daw.log("info", f"AI 生成阶段 [{stage.value}] ...")
-        result = await self.ai.generate_stage(stage, user_prompt, context)
+        result = await self.ai.generate_stage(stage, user_prompt, context, log_cb=self.daw.log)
         await self.daw.emit(kind="ai_result", stage=result.stage.value, summary=result.summary)
         await self.execute_stage(result, bpm)
         return result
@@ -77,7 +77,7 @@ class Commander:
         results: list[StageResult] = []
         context = ""
         bpm = self.daw.cfg.get("default_bpm", 100)
-        async for result in self.ai.generate_full(user_prompt, context):
+        async for result in self.ai.generate_full(user_prompt, context, log_cb=self.daw.log):
             if self._cancel:
                 await self.daw.log("warn", "流水线已被取消。")
                 break

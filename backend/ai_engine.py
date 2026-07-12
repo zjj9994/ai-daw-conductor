@@ -1,13 +1,22 @@
-"""AI 引擎：调用网页端 AI 模型（豆包 / 火山方舟 Ark，OpenAI 兼容接口）生成制作决策。
+"""AI 引擎：驱动「用户已登录的网页端 AI 窗口」生成制作决策。
 
-设计要点：
-  - 使用 OpenAI SDK 指向 Volcengine Ark 的 base_url，兼容豆包全系模型。
-  - 通过 system prompt 约束 AI 输出严格 JSON，再用 pydantic 校验为 StageResult。
-  - 若未配置有效 api_key，自动降级到内置生成器（demo 模式），保证项目可独立运行与演示。
-  - 每个阶段（compose/arrange/mix/master）有专属 prompt。
+核心思路（满足需求：不使用 API，而是复用用户在浏览器里登录的网页 AI，
+如网页版豆包 / Kimi / 通义千问 / 智谱清言）：
+
+  - 用 Playwright 连接到一个已经登录目标网页 AI 的 Chrome：
+      * CDP 模式（推荐）：用户用 `--remote-debugging-port=9222` 启动 Chrome 并登录网页 AI，
+        后端通过 connect_over_cdp 复用该会话，不触碰任何账号密码。
+      * 持久化模式：后端用独立 user_data_dir 启动 Chromium，用户首次手动登录后会话被保留。
+  - 把「系统指令 + 阶段要求 + 用户描述」拼成一条提示，填入网页 AI 的输入框并发送，
+    等待流式回复完成后抓取最新一条助手消息文本。
+  - 从文本中提取 JSON，校验为 StageResult。
+  - 若 Playwright 未安装 / 连接失败，自动降级到内置 demo 生成器，保证项目可独立运行与演示。
+
+网页 AI 的 DOM 各家不同且会改版，选择器做了多策略兜底，并支持在 config 里覆盖。
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -22,6 +31,26 @@ from . import music_theory as mt
 log = logging.getLogger("ai_engine")
 
 
+# ---------- 各网页 AI 默认入口 ----------
+DEFAULT_URLS = {
+    "doubao": "https://www.doubao.com/chat/",
+    "kimi": "https://kimi.moonshot.cn/",
+    "qwen": "https://tongyi.aliyun.com/qianwen/",
+    "zhipu": "https://chatglm.cn/main/detail/",
+    "custom": "",
+}
+
+# ---------- 选择器默认值（多策略兜底，可在 config.ai.selectors 覆盖）----------
+DEFAULT_SELECTORS = {
+    "input": "textarea, [contenteditable='true']",
+    "input_type": "auto",          # auto | textarea | contenteditable
+    "send": "",                    # 留空则按回车发送
+    "send_via_enter": True,
+    "response": "",                # 留空则用 JS 兜底抓最后一条助手消息
+    "generating": "",              # 「停止生成」按钮选择器，留空则用文本稳定性判断
+}
+
+
 SYSTEM_BASE = """你是世界级音乐制作人，精通 Logic Pro 工作流。
 你必须只输出一个合法 JSON 对象，不要输出任何解释文字、markdown 代码块或注释。
 JSON 必须可被 python json.loads 直接解析，并严格符合给定的 schema。
@@ -34,29 +63,11 @@ SCHEMA_DESC = """
 {
   "stage": "compose|arrange|mix|master",
   "summary": "本阶段决策简述（中文）",
-  "project": {                          // 仅 compose 必填
-    "title": "作品名",
-    "genre": "风格",
-    "tempo": {"bpm": 100, "time_signature": "4/4", "key": "C minor"},
-    "structure": ["intro","verse","chorus","verse","chorus","bridge","chorus","outro"],
-    "key": "C minor",
-    "description": "作品创意描述"
-  },
+  "project": {"title":"作品名","genre":"风格","tempo":{"bpm":100,"time_signature":"4/4","key":"C minor"},"structure":["intro","verse","chorus","verse","chorus","bridge","chorus","outro"],"key":"C minor","description":"作品创意描述"},
   "tracks": [{"name":"主旋律","type":"software","instrument":"Acoustic Grand Piano"}],
-  "regions": [                          // MIDI 片段，作曲/编曲阶段
-    {
-      "track":"主旋律","start":0,
-      "instrument":"Acoustic Grand Piano",
-      "notes":[{"pitch":"C4","start":0,"duration":1,"velocity":90}]
-    }
-  ],
-  "mix": [                              // 混音参数，mix 阶段
-    {"track":"主旋律","volume_db":-6,"pan":0,"mute":false,"solo":false,
-     "plugins":[{"name":"Channel EQ","preset":"Vocal"}],"sends":[{"target":"Reverb Bus","amount":0.3}]}
-  ],
-  "master_plugins": [                   // 母带插件，master 阶段
-    {"name":"Limiter","preset":"Loud"}
-  ],
+  "regions": [{"track":"主旋律","start":0,"instrument":"Acoustic Grand Piano","notes":[{"pitch":"C4","start":0,"duration":1,"velocity":90}]}],
+  "mix": [{"track":"主旋律","volume_db":-6,"pan":0,"mute":false,"solo":false,"plugins":[{"name":"Channel EQ","preset":"Vocal"}],"sends":[{"target":"Reverb Bus","amount":0.3}]}],
+  "master_plugins": [{"name":"Limiter","preset":"Loud"}],
   "bounce": {"format":"wav","bit_depth":24,"sample_rate":44100,"normalize":false,"filename":"final_master"},
   "rationale": "创作思路解释（中文）"
 }
@@ -65,133 +76,324 @@ SCHEMA_DESC = """
 STAGE_PROMPTS = {
     Stage.COMPOSE: """阶段：作曲（compose）
 请完成：确定作品标题、风格、速度、调性、段落结构，并生成主旋律与和声的 MIDI 音符。
-要求：
-- 主旋律要有记忆点、符合调性、节奏自然。
-- 至少给出 主旋律、和弦/和声 两轨。
-- 段落结构至少 4 段；为每个段落在相应轨道上给出音符（start 相对全曲的拍数）。
-- 总长度建议 16-32 小节（4/4 下即 64-128 拍）。
-""",
+要求：主旋律要有记忆点、符合调性、节奏自然；至少给出主旋律、和弦/和声两轨；
+段落结构至少 4 段；为每个段落在相应轨道上给出音符（start 相对全曲的拍数）；总长度 16-32 小节。""",
     Stage.ARRANGE: """阶段：编曲（arrange）
 在已有作曲基础上完成：决定乐器配置与各声部 MIDI。
-要求：
-- 新增 鼓组、贝斯、和声铺底、装饰/副旋律 等轨道，并为每个轨道编写 MIDI 片段。
-- 鼓组用 MIDI 数字：底鼓 36、军鼓 38、踩镲 42、开镲 46、嗵鼓 50/48、镲 49。
-- 贝斯走根音与节奏支撑，和声铺底用长音 pad。
-- 各 region 的 start 要对齐段落。
-""",
+要求：新增鼓组、贝斯、和声铺底、装饰/副旋律等轨道并编写 MIDI 片段；
+鼓组用 MIDI 数字：底鼓 36、军鼓 38、踩镲 42、开镲 46、嗵鼓 50/48、镲 49；
+贝斯走根音与节奏支撑，和声铺底用长音 pad；各 region 的 start 要对齐段落。""",
     Stage.MIX: """阶段：混音（mix）
 为所有已有轨道设置音量、声相、均衡、压缩、发送等。
-要求：
-- 主旋律/人声靠中、-3dB 左右；贝斯居中 -6dB；鼓组分轨设声相。
-- 给鼓组加 Channel EQ + Compressor，给人声加 DeEsser + Reverb 发送。
-- 建立一条 Reverb Bus 辅助通道并让需要空间的轨道发送。
-- 输出 mix 数组覆盖全部轨道。
-""",
+要求：主旋律/人声靠中、-3dB 左右；贝斯居中 -6dB；鼓组分轨设声相；
+给鼓组加 Channel EQ + Compressor，给人声加 DeEsser + Reverb 发送；
+建立一条 Reverb Bus 辅助通道并让需要空间的轨道发送；输出 mix 数组覆盖全部轨道。""",
     Stage.MASTER: """阶段：母带（master）
 在主输出施加母带链并设置导出参数。
-要求：
-- 顺序：Channel EQ（修整低频）-> Compressor（胶合）-> Limiter（响度）。
-- Limiter 目标 -1 dBTP，响度约 -14 LUFS（流媒体友好）。
-- 给出 bounce 导出参数。
-""",
+要求：顺序 Channel EQ（修整低频）-> Compressor（胶合）-> Limiter（响度）；
+Limiter 目标 -1 dBTP，响度约 -14 LUFS；给出 bounce 导出参数。""",
 }
 
 
-class AIEngine:
-    def __init__(self, cfg: dict):
-        self.cfg = cfg.get("ai", {})
-        self.api_key = self.cfg.get("api_key", "")
-        self.base_url = self.cfg.get("base_url", "https://ark.cn-beijing.volces.com/api/v3")
-        self.model = self.cfg.get("model", "")
-        self.temperature = float(self.cfg.get("temperature", 0.8))
-        self.max_tokens = int(self.cfg.get("max_tokens", 4096))
-        self.timeout = float(self.cfg.get("timeout", 120))
-        self._client = None
-        self._init_client()
+class WebAIDriver:
+    """通过 Playwright 驱动用户已登录的网页 AI。"""
 
-    def _init_client(self):
-        if self.api_key and self.api_key.startswith("YOUR_") is False and self.model:
-            try:
-                from openai import AsyncOpenAI
-                self._client = AsyncOpenAI(
-                    api_key=self.api_key,
-                    base_url=self.base_url,
-                    timeout=self.timeout,
-                )
-            except Exception as e:  # pragma: no cover
-                log.warning("OpenAI 客户端初始化失败，使用内置生成器: %s", e)
-                self._client = None
+    def __init__(self, cfg: dict):
+        ai = cfg.get("ai", {})
+        self.provider = ai.get("provider", "doubao")
+        self.url = ai.get("web_url") or DEFAULT_URLS.get(self.provider, "")
+        self.selectors = {**DEFAULT_SELECTORS, **(ai.get("selectors") or {})}
+        self.timeout = float(ai.get("timeout", 180))
+
+        b = cfg.get("browser", {})
+        self.mode = b.get("mode", "cdp")          # cdp | persistent
+        self.cdp_url = b.get("cdp_url", "http://127.0.0.1:9222")
+        self.user_data_dir = b.get("user_data_dir", "~/.ai-daw-conductor/browser-profile")
+        self.headless = bool(b.get("headless", False))
+
+        self._pw = None
+        self._browser = None
+        self._context = None
+        self._page = None
+
+    @property
+    def available(self) -> bool:
+        """Playwright 已安装且配置了目标 URL。"""
+        try:
+            import playwright  # noqa: F401
+        except Exception:
+            return False
+        return bool(self.url)
+
+    @property
+    def connected(self) -> bool:
+        return self._context is not None
+
+    # ---------- 连接 ----------
+    async def _connect(self):
+        from playwright.async_api import async_playwright
+        self._pw = await async_playwright().start()
+
+        if self.mode == "cdp":
+            log.info("通过 CDP 连接 Chrome: %s", self.cdp_url)
+            self._browser = await self._pw.chromium.connect_over_cdp(self.cdp_url)
+            ctxs = self._browser.contexts
+            self._context = ctxs[0] if ctxs else await self._browser.new_context()
         else:
-            log.info("未配置有效 ai.api_key/model，AI 引擎将运行在 demo（内置生成器）模式。")
+            from pathlib import Path
+            ud = Path(self.user_data_dir).expanduser()
+            ud.mkdir(parents=True, exist_ok=True)
+            log.info("启动持久化 Chromium（用户目录 %s）", ud)
+            self._context = await self._pw.chromium.launch_persistent_context(
+                str(ud), headless=self.headless, args=["--start-maximized"]
+            )
+
+    async def ensure_page(self):
+        if not self._context:
+            await self._connect()
+        # 复用已打开的目标网页 AI 标签页
+        for p in self._context.pages:
+            if self.url and self.url_host in (p.url or ""):
+                self._page = p
+                await p.bring_to_front()
+                return p
+        # 否则新建标签页打开
+        self._page = await self._context.new_page()
+        await self._page.goto(self.url, wait_until="domcontentloaded", timeout=60000)
+        await self._page.wait_for_timeout(2000)
+        return self._page
+
+    @property
+    def url_host(self) -> str:
+        m = re.search(r"https?://([^/]+)", self.url or "")
+        return m.group(1) if m else ""
+
+    # ---------- 发送与读取 ----------
+    async def chat(self, prompt: str, log_cb=None) -> str:
+        """向网页 AI 发送一条 prompt，返回最新一条助手回复文本。"""
+        page = await self.ensure_page()
+        if log_cb:
+            await log_cb("info", f"向网页 AI 注入提示（{len(prompt)} 字）...")
+
+        before_count = await self._assistant_msg_count(page)
+
+        await self._type_and_send(page, prompt)
+        await self._wait_for_completion(page, before_count, log_cb)
+
+        text = await self._last_assistant_text(page)
+        if log_cb:
+            await log_cb("info", f"网页 AI 回复已抓取（{len(text)} 字）")
+        return text
+
+    async def _type_and_send(self, page, prompt: str):
+        # 聚焦输入框
+        sel = self.selectors["input"] or DEFAULT_SELECTORS["input"]
+        try:
+            await page.locator(sel).first.wait_for(state="visible", timeout=15000)
+        except Exception:
+            # 兜底：找页面里任意 textarea / contenteditable
+            await page.locator("textarea, [contenteditable='true']").first.wait_for(state="visible", timeout=15000)
+            sel = "textarea, [contenteditable='true']"
+
+        loc = page.locator(sel).first
+        await loc.click(timeout=10000)
+        await page.wait_for_timeout(150)
+
+        # 判断输入类型
+        itype = self.selectors["input_type"]
+        if itype == "auto":
+            tag = await loc.evaluate("el => el.tagName.toLowerCase()")
+            itype = "textarea" if tag == "textarea" else "contenteditable"
+
+        if itype == "contenteditable":
+            await loc.evaluate("(el, txt) => { el.focus(); document.execCommand('insertText', false, txt); }", prompt)
+        else:
+            await loc.fill(prompt, timeout=10000)
+
+        await page.wait_for_timeout(200)
+
+        # 发送
+        sent = False
+        send_sel = self.selectors.get("send") or ""
+        if send_sel:
+            try:
+                btn = page.locator(send_sel).last
+                if await btn.count() and await btn.is_enabled():
+                    await btn.click()
+                    sent = True
+            except Exception:
+                sent = False
+        if not sent and self.selectors.get("send_via_enter", True):
+            await page.keyboard.press("Enter")
+            sent = True
+        if not sent:
+            # 最后兜底：按回车
+            await page.keyboard.press("Enter")
+        await page.wait_for_timeout(500)
+
+    async def _assistant_msg_count(self, page) -> int:
+        return await page.evaluate("""() => {
+            const els = document.querySelectorAll(
+                "[class*='message'], [class*='answer'], [class*='receive'], [class*='assistant'], [data-role='assistant']"
+            );
+            return els.length;
+        }""")
+
+    async def _wait_for_completion(self, page, before_count, log_cb=None):
+        """等待流式回复完成：助手段落数增加 + 文本稳定 / 停止按钮消失。"""
+        timeout = self.timeout
+        deadline = asyncio.get_event_loop().time() + timeout
+        stable_for = 0.0
+        last_text = ""
+        last_change = asyncio.get_event_loop().time()
+        min_wait = asyncio.get_event_loop().time() + 3.0  # 至少等 3s 避免误判
+
+        if log_cb:
+            await log_cb("info", "等待网页 AI 生成完成...")
+
+        while True:
+            now = asyncio.get_event_loop().time()
+            if now > deadline:
+                if log_cb:
+                    await log_cb("warn", f"等待超时（{timeout}s），按当前文本继续。")
+                return
+
+            count = await self._assistant_msg_count(page)
+            text = await self._last_assistant_text(page)
+            generating = await self._is_generating(page)
+
+            if text != last_text:
+                last_text = text
+                last_change = now
+                stable_for = 0.0
+            else:
+                stable_for = now - last_change
+
+            # 完成条件：已有新助手段落 且 文本稳定 1.2s 且 不在生成中 且 超过最小等待
+            if (count > before_count and stable_for >= 1.2
+                    and not generating and now > min_wait):
+                return
+
+            await asyncio.sleep(0.5)
+
+    async def _is_generating(self, page) -> bool:
+        sel = self.selectors.get("generating") or ""
+        if sel:
+            try:
+                if await page.locator(sel).count():
+                    return True
+            except Exception:
+                pass
+        # 兜底：检测「停止生成」类按钮
+        return bool(await page.evaluate("""() => {
+            const btns = [...document.querySelectorAll('button, [role="button"]')];
+            return btns.some(b => /停止|stop|生成中|generating/i.test(b.getAttribute('aria-label') + ' ' + b.className + ' ' + (b.innerText||'')));
+        }"""))
+
+    async def _last_assistant_text(self, page) -> str:
+        sel = self.selectors.get("response") or ""
+        if sel:
+            try:
+                cnt = await page.locator(sel).count()
+                if cnt:
+                    return await page.locator(sel).nth(cnt - 1).inner_text(timeout=5000)
+            except Exception:
+                pass
+        # JS 兜底：取最后一条助手消息容器文本
+        return await page.evaluate("""() => {
+            const sels = "[class*='message'], [class*='answer'], [class*='receive'], [class*='assistant'], [data-role='assistant']";
+            let els = [...document.querySelectorAll(sels)];
+            if (!els.length) {
+                // 退而求其次：抓所有长文本块
+                els = [...document.querySelectorAll('article, section, div')].filter(e => e.innerText && e.innerText.length > 80);
+            }
+            if (!els.length) return '';
+            return els[els.length - 1].innerText.trim();
+        }""")
+
+    async def close(self):
+        try:
+            if self._pw:
+                await self._pw.stop()
+        except Exception:
+            pass
+        self._pw = self._browser = self._context = self._page = None
+
+
+class AIEngine:
+    """对外接口保持不变（generate_stage / generate_full / online）。"""
+
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+        self.driver = WebAIDriver(cfg)
+        self._use_web = self.driver.available
+        if not self._use_web:
+            log.info("Playwright 未安装或未配置网页 AI，AI 引擎将运行在 demo（内置生成器）模式。"
+                     "安装 playwright 后可驱动网页版豆包/Kimi/通义千问。")
 
     @property
     def online(self) -> bool:
-        return self._client is not None
+        return self._use_web
 
     async def generate_stage(
         self,
         stage: Stage,
         user_prompt: str,
         context: Optional[str] = None,
+        log_cb=None,
     ) -> StageResult:
-        """生成单个阶段的制作决策。"""
-        if self.online:
+        if self._use_web:
             try:
-                return await self._generate_via_llm(stage, user_prompt, context)
+                return await self._generate_via_web(stage, user_prompt, context, log_cb)
             except Exception as e:
-                log.warning("LLM 调用失败 (%s)，降级到内置生成器。", e)
+                log.warning("网页 AI 调用失败 (%s)，降级到内置生成器。", e)
+                if log_cb:
+                    await log_cb("warn", f"网页 AI 调用失败：{e}，本阶段降级为 demo。")
         return self._generate_demo(stage, user_prompt, context)
 
-    async def generate_full(self, user_prompt: str, context: Optional[str] = None) -> AsyncIterator[StageResult]:
-        """完整流水线：依次产出 compose/arrange/mix/master 四个阶段。"""
+    async def generate_full(self, user_prompt: str, context: Optional[str] = None,
+                            log_cb=None) -> "AsyncIterator[StageResult]":
         accumulated = context or ""
         for stage in [Stage.COMPOSE, Stage.ARRANGE, Stage.MIX, Stage.MASTER]:
-            result = await self.generate_stage(stage, user_prompt, accumulated)
+            result = await self.generate_stage(stage, user_prompt, accumulated, log_cb)
             accumulated += f"\n[{stage.value}] {result.summary}"
             yield result
 
-    # ---------- LLM 路径 ----------
-    async def _generate_via_llm(self, stage: Stage, user_prompt: str, context: Optional[str]) -> StageResult:
-        sys = SYSTEM_BASE + "\n" + SCHEMA_DESC + "\n" + STAGE_PROMPTS[stage]
-        if context:
-            sys += f"\n已有上下文（前一阶段产出，需在此基础上延续）：\n{context}"
-
-        resp = await self._client.chat.completions.create(
-            model=self.model,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": sys},
-                {"role": "user", "content": user_prompt or "请按你的专业判断完成本阶段。"},
-            ],
+    # ---------- 网页 AI 路径 ----------
+    async def _generate_via_web(self, stage: Stage, user_prompt: str,
+                                context: Optional[str], log_cb) -> StageResult:
+        full = (
+            SYSTEM_BASE + "\n" + SCHEMA_DESC + "\n" + STAGE_PROMPTS[stage]
+            + (f"\n已有上下文（前一阶段产出，需在此基础上延续）：\n{context}" if context else "")
+            + f"\n\n用户需求：{user_prompt or '请按你的专业判断完成本阶段。'}"
+            + '\n\n请只输出上述 schema 的 JSON 对象。'
         )
-        raw = resp.choices[0].message.content or "{}"
+        raw = await self.driver.chat(full, log_cb=log_cb)
         data = self._extract_json(raw)
-        return self._validate(stage, data, user_prompt)
+        if data is None:
+            raise ValueError(f"未能从网页 AI 回复中解析出 JSON（前80字：{raw[:80]!r}）")
+        data = dict(data)
+        data["stage"] = stage.value
+        return StageResult.model_validate(data)
 
     @staticmethod
-    def _extract_json(raw: str) -> dict:
+    def _extract_json(raw: str) -> Optional[dict]:
+        if not raw:
+            return None
         raw = raw.strip()
-        # 去掉可能的 ```json ... ``` 包裹
         if raw.startswith("```"):
             raw = re.sub(r"^```(?:json)?\s*", "", raw)
             raw = re.sub(r"\s*```$", "", raw)
-        # 截取第一个 { 到最后一个 }
         s, e = raw.find("{"), raw.rfind("}")
         if s != -1 and e != -1 and e > s:
             raw = raw[s:e + 1]
-        return json.loads(raw)
-
-    def _validate(self, stage: Stage, data: dict, user_prompt: str) -> StageResult:
-        data = dict(data)
-        data["stage"] = stage.value
-        # 规范化 pitch：交给 pydantic 校验，music_theory 在执行时再解析
-        return StageResult.model_validate(data)
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
 
     # ---------- Demo 生成器（离线可用） ----------
     def _generate_demo(self, stage: Stage, user_prompt: str, context: Optional[str]) -> StageResult:
-        """无 API key 时的内置生成器，产出完整可执行的 StageResult。"""
         if stage == Stage.COMPOSE:
             return self._demo_compose(user_prompt)
         if stage == Stage.ARRANGE:
@@ -205,24 +407,20 @@ class AIEngine:
         root = "A3"
         bpm = 100
         structure = ["intro", "verse", "chorus", "verse", "chorus", "outro"]
-        section_len = 16  # 拍
+        section_len = 16
         melody_notes: list[NoteSpec] = []
         chord_notes: list[NoteSpec] = []
-        # A 小调音阶上行旋律 + 和弦
         scale = mt.scale_notes(root, "minor", 2)
-        progressions = [[0, 5, 3, 4], [0, 5, 3, 7]]  # Am F G Am 风格根音
         chord_roots = ["A2", "F2", "G2", "A2"]
         for si, sec in enumerate(structure):
             base = si * section_len
             for b in range(section_len):
-                # 旋律：每拍一个音
                 idx = (si * 4 + b) % len(scale)
                 melody_notes.append(NoteSpec(
                     pitch=scale[idx], start=float(base + b), duration=1.0, velocity=85 + (b % 3) * 5
                 ))
-            # 和弦：每 4 拍一个长和弦
             cr = chord_roots[si % len(chord_roots)]
-            for ci, iv in enumerate([0, 3, 7]):  # 三和弦
+            for iv in [0, 3, 7]:
                 chord_notes.append(NoteSpec(
                     pitch=mt.resolve_pitch(cr) + iv,
                     start=float(base), duration=float(section_len), velocity=70
@@ -258,7 +456,6 @@ class AIEngine:
             base = si * section_len
             if sec in ("verse", "chorus", "outro"):
                 for b in range(section_len):
-                    # 底鼓 1、3 拍；军鼓 2、4 拍；踩镲每半拍
                     if b % 4 == 0:
                         drums.append(NoteSpec(pitch=36, start=float(base + b), duration=0.5, velocity=110))
                     if b % 4 == 2:
@@ -267,12 +464,10 @@ class AIEngine:
                         drums.append(NoteSpec(pitch=42, start=float(base + b + h * 0.5), duration=0.25, velocity=70))
             if sec in ("chorus", "outro"):
                 for b in range(0, section_len, 2):
-                    drums.append(NoteSpec(pitch=49, start=float(base + b), duration=0.25, velocity=90))  # crash
-            # 贝斯：每 2 拍一个根音
+                    drums.append(NoteSpec(pitch=49, start=float(base + b), duration=0.25, velocity=90))
             br = bass_roots[si % len(bass_roots)]
             for b in range(0, section_len, 2):
                 bass.append(NoteSpec(pitch=br, start=float(base + b), duration=2.0, velocity=95))
-            # 和声铺底
             pad_root = mt.resolve_pitch(bass_roots[si % len(bass_roots)].replace("1", "3"))
             for iv in [0, 7, 12]:
                 pad.append(NoteSpec(pitch=pad_root + iv, start=float(base), duration=float(section_len), velocity=55))
@@ -341,3 +536,6 @@ class AIEngine:
                               normalize=False, filename="ai_daw_conductor_master"),
             rationale="母带链先修整低频淤积，再用胶合压缩提升密度，最后限制器推响度至流媒体标准。",
         )
+
+    async def close(self):
+        await self.driver.close()

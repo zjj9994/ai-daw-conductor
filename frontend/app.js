@@ -40,7 +40,7 @@ function handle(evt) {
   const k = evt.kind;
   switch (k) {
     case "connected":
-      setChip("#chip-ai", evt.ai_online, evt.ai_online ? "AI 在线" : "AI 离线");
+      setChip("#chip-ai", evt.ai_online, evt.ai_online ? "网页 AI 就绪" : "demo 模式");
       break;
     case "log":
       addLog(evt.level || "info", evt.message, "log");
@@ -263,9 +263,13 @@ $("#btn-settings").addEventListener("click", async () => {
   try {
     const s = await (await fetch("/api/settings")).json();
     $("#set-provider").value = s.provider || "doubao";
-    $("#set-baseurl").value = s.base_url || "";
-    $("#set-model").value = s.model || "";
-    $("#set-status").textContent = s.ai_online ? "当前：AI 在线" : "当前：AI 离线（demo 模式）";
+    $("#set-weburl").value = s.web_url || "";
+    $("#set-timeout").value = s.timeout || 180;
+    $("#set-bmode").value = s.browser_mode || "cdp";
+    $("#set-cdpurl").value = s.cdp_url || "http://127.0.0.1:9222";
+    $("#set-userdata").value = s.user_data_dir || "";
+    const tag = s.ai_online ? (s.browser_connected ? "已连接网页 AI" : "网页 AI 就绪（未连接）") : "未启用（demo）";
+    $("#set-status").textContent = "当前：" + tag;
   } catch (e) {}
 });
 $("#btn-close-settings").addEventListener("click", () => modal.classList.remove("open"));
@@ -274,10 +278,11 @@ modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList
 $("#btn-save-settings").addEventListener("click", async () => {
   const body = {
     provider: $("#set-provider").value,
-    base_url: $("#set-baseurl").value.trim() || undefined,
-    model: $("#set-model").value.trim() || undefined,
-    api_key: $("#set-apikey").value.trim() || undefined,
-    temperature: parseFloat($("#set-temp").value) || undefined,
+    web_url: $("#set-weburl").value.trim() || undefined,
+    timeout: parseFloat($("#set-timeout").value) || undefined,
+    browser_mode: $("#set-bmode").value,
+    cdp_url: $("#set-cdpurl").value.trim() || undefined,
+    user_data_dir: $("#set-userdata").value.trim() || undefined,
   };
   try {
     const res = await fetch("/api/settings", {
@@ -285,16 +290,35 @@ $("#btn-save-settings").addEventListener("click", async () => {
       body: JSON.stringify(body),
     });
     const j = await res.json();
-    $("#set-status").textContent = j.ai_online ? "已保存 · AI 在线" : "已保存 · AI 离线（demo 模式）";
-    setChip("#chip-ai", j.ai_online, j.ai_online ? "AI 在线" : "AI 离线");
+    $("#set-status").textContent = j.ai_online ? "已保存 · 网页 AI 就绪" : "已保存 · demo 模式（未安装 Playwright）";
+    setChip("#chip-ai", j.ai_online, j.ai_online ? "网页 AI 就绪" : "demo 模式");
   } catch (e) {
     $("#set-status").textContent = "保存失败：" + e;
+  }
+});
+
+$("#btn-test-connect").addEventListener("click", async () => {
+  $("#set-status").textContent = "正在连接浏览器…";
+  // 先保存再测试，确保用最新配置
+  $("#btn-save-settings").click();
+  try {
+    const res = await fetch("/api/browser/connect", { method: "POST" });
+    const j = await res.json();
+    if (j.ok) {
+      $("#set-status").textContent = "✓ 已连接：" + (j.url || j.provider);
+      setChip("#chip-ai", true, "已连接网页 AI");
+    } else {
+      $("#set-status").textContent = "✗ " + (j.error || "连接失败");
+    }
+  } catch (e) {
+    $("#set-status").textContent = "✗ " + e;
   }
 });
 
 // 平台检测
 fetch("/api/health").then((r) => r.json()).then((h) => {
   setChip("#chip-daw", h.daw_platform === "macos", h.daw_platform === "macos" ? "DAW 实控" : "DAW 模拟");
+  setChip("#chip-ai", h.ai_online, h.ai_online ? "网页 AI 就绪" : "demo 模式");
 }).catch(() => {});
 
 // ---------- 背景示波器 ----------

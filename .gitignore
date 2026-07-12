@@ -35,6 +35,12 @@ config/config.json
 *.key
 secrets/
 
+# 浏览器自动化用户目录（含登录态，切勿入库）
+.browser-profile/
+chrome-profile/
+.browser-profile
+~/.ai-daw-conductor/
+
 # Project artifacts
 output/
 renders/

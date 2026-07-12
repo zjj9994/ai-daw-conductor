@@ -1,7 +1,7 @@
 """配置加载：合并 config.yaml 与环境变量。
 
 优先级（从高到低）：
-  1. 环境变量（AI_API_KEY / AI_MODEL / AI_BASE_URL ...）
+  1. 环境变量（AI_PROVIDER / AI_WEB_URL / BROWSER_MODE / BROWSER_CDP_URL ...）
   2. config/config.yaml
   3. config/config.example.yaml（仅作为字段参考，不含密钥）
 """
@@ -42,16 +42,20 @@ def load_config() -> dict[str, Any]:
     user = _load_yaml(CONFIG_DIR / "config.yaml")
     cfg = _deep_merge(base, user)
 
-    # 环境变量覆盖
+    # 环境变量覆盖（网页 AI + 浏览器连接）
     ai = cfg.setdefault("ai", {})
-    if os.getenv("AI_API_KEY"):
-        ai["api_key"] = os.getenv("AI_API_KEY")
-    if os.getenv("AI_BASE_URL"):
-        ai["base_url"] = os.getenv("AI_BASE_URL")
-    if os.getenv("AI_MODEL"):
-        ai["model"] = os.getenv("AI_MODEL")
     if os.getenv("AI_PROVIDER"):
         ai["provider"] = os.getenv("AI_PROVIDER")
+    if os.getenv("AI_WEB_URL"):
+        ai["web_url"] = os.getenv("AI_WEB_URL")
+
+    browser = cfg.setdefault("browser", {})
+    if os.getenv("BROWSER_MODE"):
+        browser["mode"] = os.getenv("BROWSER_MODE")
+    if os.getenv("BROWSER_CDP_URL"):
+        browser["cdp_url"] = os.getenv("BROWSER_CDP_URL")
+    if os.getenv("BROWSER_USER_DATA_DIR"):
+        browser["user_data_dir"] = os.getenv("BROWSER_USER_DATA_DIR")
 
     server = cfg.setdefault("server", {})
     if os.getenv("SERVER_PORT"):

@@ -1,19 +1,20 @@
 # 🎹 AI-DAW-Conductor
 
-> 用网页端 AI 模型（豆包 / 火山方舟 Ark）指挥 Logic Pro，让 AI **独立完成** 作曲 → 编曲 → 混音 → 母带 全流程。
+> 复用**你已登录的网页端 AI**（网页版豆包 / Kimi / 通义千问 / 智谱清言）指挥 Logic Pro，让 AI **独立完成** 作曲 → 编曲 → 混音 → 母带 全流程。**不使用 API、不需要 API Key。**
 
-在浏览器里用自然语言描述你想要的歌曲，AI 负责所有音乐创作决策，后端把这些决策翻译成 MIDI、轨道、混音参数与插件操作，自动驱动 Logic Pro 完成制作并导出母带。
+在控制台网页里用自然语言描述你想要的歌曲，后端用 Playwright 接管你浏览器里那个已经登录的网页 AI 窗口，把「系统指令 + 阶段要求 + 你的描述」注入对话框，抓取 AI 回复的结构化 JSON，再翻译成 MIDI、轨道、混音参数与插件操作，自动驱动 Logic Pro 完成制作并导出母带。
 
 ```
-┌────────────┐    WebSocket     ┌─────────────────┐    MIDI + AppleScript    ┌───────────┐
-│  网页前端   │ ◄──────────────► │  本地后端服务     │ ───────────────────────► │ Logic Pro  │
-│ (浏览器)    │                  │  FastAPI + WS   │                          │  (macOS)   │
-└────────────┘                  └────────┬────────┘                          └───────────┘
-                                          │ 调用 LLM
-                                          ▼
-                                ┌─────────────────┐
-                                │ 豆包 / 方舟 Ark  │  ← OpenAI 兼容接口
-                                └─────────────────┘
+┌────────────┐   WebSocket    ┌──────────────────┐  MIDI+AppleScript  ┌───────────┐
+│  控制台网页  │ ◄────────────► │   本地后端服务     │ ─────────────────► │ Logic Pro  │
+│ (浏览器)    │                │  FastAPI + WS    │                    │  (macOS)   │
+└────────────┘                └────────┬─────────┘                    └───────────┘
+                                       │ Playwright (CDP)
+                                       ▼
+                             ┌──────────────────────┐
+                             │ 你已登录的网页 AI 标签页 │  ← 豆包 / Kimi / 千问 …
+                             │ (你的真实账号会话)       │
+                             └──────────────────────┘
 ```
 
 ## ✨ 能做什么
@@ -27,13 +28,22 @@ AI 在四个阶段独立完成决策与执行：
 | **混音 Mix** | 音量、声相、EQ、压缩、发送、效果链 | 设置混音器参数、挂插件、建 Reverb Bus |
 | **母带 Master** | 母带链（EQ→压缩→限制器）与导出参数 | 主输出挂母带插件、Bounce 导出 wav/aiff/mp3 |
 
+## 🔑 为什么不用 API？
+
+按需求，本项目**不调用任何大模型 API**，而是直接复用你在浏览器里登录好的网页 AI 会话：
+
+- 你像往常一样打开网页版豆包 / Kimi / 千问并登录；
+- 后端通过 Chrome DevTools Protocol（CDP）连接到这个浏览器进程，在 AI 窗口里代你输入提示词、读取流式回复；
+- 全程不接触账号密码、不申请 API Key、不产生 API 计费；
+- 你的会员权益、长上下文、联网搜索等网页 AI 原有能力全部保留。
+
 ## 🧱 架构
 
 ```
 ai-daw-conductor/
 ├── backend/
 │   ├── server.py            # FastAPI + WebSocket，前端入口与事件流
-│   ├── ai_engine.py         # 调用豆包/Ark（OpenAI 兼容），产出 StageResult；含离线 demo 生成器
+│   ├── ai_engine.py         # WebAIDriver(Playwright) 驱动网页 AI + 内置 demo 生成器
 │   ├── commander.py         # 把 AI 决策编排为有序执行（流水线）
 │   ├── daw_controller.py    # 高层动作：建项目/轨道/MIDI/混音/母带/导出
 │   ├── midi_engine.py       # 生成标准 MIDI 文件 + 虚拟端口实时输出（mido/rtmidi）
@@ -48,6 +58,7 @@ ai-daw-conductor/
 ├── scripts/
 │   ├── install.sh           # 一键安装
 │   ├── run.sh               # 启动服务
+│   ├── launch_chrome.sh     # 启动带调试端口的 Chrome（用于网页 AI 登录）
 │   └── logic_setup.scpt     # Logic Pro 环境准备（macOS）
 ├── config/
 │   └── config.example.yaml  # 配置模板
@@ -57,14 +68,16 @@ ai-daw-conductor/
 
 ### 工作流
 
-1. 用户在网页输入创作指令（如「一首 100BPM 的 A 小调抒情流行」）。
-2. 后端 `AIEngine` 调用豆包模型，每个阶段返回严格 JSON（`StageResult`）。
-3. `Commander` 把 `StageResult` 交给 `DAWController`：
+1. 用 `launch_chrome.sh` 启动一个带调试端口的 Chrome，在里面登录你的网页 AI（豆包/Kimi/千问…）。
+2. 启动后端，在前端「设置」里选好网页 AI 服务并点「测试连接」。
+3. 在控制台网页输入创作指令（如「一首 100BPM 的 A 小调抒情流行」）。
+4. 后端 `WebAIDriver` 把指令注入网页 AI 对话框，等待流式回复完成，抓取文本并解析为 JSON（`StageResult`）。
+5. `Commander` 把 `StageResult` 交给 `DAWController`：
    - `MidiEngine` 生成标准 MIDI 文件；
    - `AppleScriptBridge` 通过 osascript 在 Logic Pro 里建轨道、导入 MIDI、调混音器、挂插件、Bounce。
-4. 全程事件经 WebSocket 实时推给前端，日志/轨道/混音台/导出状态即时更新。
+6. 全程事件经 WebSocket 实时推给前端，日志/轨道/混音台/导出状态即时更新。
 
-> **无需 API Key 也能跑**：未配置凭证时，`AIEngine` 自动降级到内置 demo 生成器，产出完整可执行的四个阶段（A 小调示范曲），方便在没有密钥/非 macOS 环境下演示与开发。
+> **未装 Playwright / 未连接浏览器也能跑**：自动降级到内置 demo 生成器，产出完整可执行的四个阶段（A 小调示范曲），方便在无浏览器/非 macOS 环境下演示与开发。
 
 ## 🚀 快速开始
 
@@ -73,22 +86,18 @@ ai-daw-conductor/
 ```bash
 git clone https://github.com/zjj9994/ai-daw-conductor.git
 cd ai-daw-conductor
-./scripts/install.sh        # 创建 venv、装依赖、生成 config.yaml
+./scripts/install.sh        # 创建 venv、装依赖（含 Playwright）、生成 config.yaml
 ```
 
-### 2. 配置 AI（豆包 / 火山方舟 Ark）
+### 2. 登录网页 AI（一次性）
 
-编辑 `config/config.yaml`，填入：
-
-```yaml
-ai:
-  provider: doubao
-  base_url: "https://ark.cn-beijing.volces.com/api/v3"
-  api_key: "你的 Ark API Key"          # console.volcengine.com/ark 获取
-  model: "ep-xxxxxxxxxxxxxxxx"          # 豆包推理接入点 id，或 doubao-pro-32k 等
+```bash
+./scripts/launch_chrome.sh   # 启动带调试端口的 Chrome 并打开豆包
 ```
 
-也可以启动后在网页「设置」里填写并即时生效。
+在弹出的 Chrome 里**登录你的网页 AI 账号**（豆包 / Kimi / 通义千问 / 智谱清言均可），登录状态会被这个独立用户目录记住。之后保持该 Chrome 开着即可。
+
+> 也可改用 `config.yaml` 里的 `browser.mode: persistent`，由后端直接启动一个 Chromium 并保留登录态，省去手动开 Chrome（首次仍需手动登录一次）。
 
 ### 3.（macOS）准备 Logic Pro
 
@@ -105,15 +114,16 @@ osascript scripts/logic_setup.scpt
 # 打开 http://127.0.0.1:8787
 ```
 
-在网页里输入你的创作要求，选择「全流程」或单个阶段，点击「开始制作」即可。所有进度、日志、轨道、混音与导出状态会实时显示。
+点右上「设置」选择网页 AI 服务 → 「测试连接」确认已连上 → 输入创作要求 → 选「全流程」或单阶段 → 「开始制作」。所有进度、日志、轨道、混音与导出状态实时显示。
 
 ## 🔌 API 速览
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET  | `/` | 前端页面 |
-| GET  | `/api/health` | 健康检查 / AI 是否在线 |
-| GET/POST | `/api/settings` | 读取/更新 AI 配置 |
+| GET  | `/api/health` | 健康检查 / 网页 AI 是否就绪 / 浏览器是否已连接 |
+| GET/POST | `/api/settings` | 读取/更新网页 AI 与浏览器配置 |
+| POST | `/api/browser/connect` | 连接/复用已登录的网页 AI 标签页 |
 | POST | `/api/stage` | 执行单阶段（compose/arrange/mix/master） |
 | POST | `/api/pipeline` | 执行完整四阶段流水线 |
 | POST | `/api/cancel` | 取消当前任务 |
@@ -123,28 +133,35 @@ osascript scripts/logic_setup.scpt
 
 见 [config/config.example.yaml](config/config.example.yaml)。关键项：
 
-- `ai.*`：模型 provider / base_url / api_key / model / temperature
-- `daw.midi_port`：虚拟 MIDI 端口名（Logic Pro 输入端需匹配）
-- `daw.use_applescript`：是否用 AppleScript 实控（仅 macOS）
-- `daw.render_dir`：导出目录
+- `ai.provider`：网页 AI 服务（`doubao` / `kimi` / `qwen` / `zhipu` / `custom`）
+- `ai.web_url`：网页 AI 聊天页地址（留空用内置默认）
+- `ai.selectors.*`：网页 DOM 选择器（一般无需改；页面改版导致抓取失败时可调）
+- `browser.mode`：`cdp`（连接已登录 Chrome，推荐）或 `persistent`（独立 Chromium 目录）
+- `browser.cdp_url`：CDP 调试地址（默认 `http://127.0.0.1:9222`）
+- `daw.midi_port` / `daw.use_applescript` / `daw.render_dir`
 - `workflow.pipeline`：流水线阶段顺序
 
-环境变量覆盖：`AI_API_KEY` / `AI_BASE_URL` / `AI_MODEL` / `AI_PROVIDER` / `SERVER_PORT`。
+环境变量覆盖：`AI_PROVIDER` / `AI_WEB_URL` / `BROWSER_MODE` / `BROWSER_CDP_URL` / `BROWSER_USER_DATA_DIR` / `SERVER_PORT`。
+
+### 网页 AI 选择器说明
+
+各网页 AI 的 DOM 不一且会改版。驱动器做了多策略兜底：输入框优先找 `textarea`/`[contenteditable]`，发送优先配置的发送按钮、否则按回车；助手回复优先用配置的 `response` 选择器、否则用 JS 抓取最后一条消息容器；「停止生成」状态用 `generating` 选择器或文本稳定性判断。若某家网页 AI 改版导致抓取异常，在 `config.yaml` 的 `ai.selectors` 里填入对应选择器即可。
 
 ## 🎛️ 平台说明
 
-| 平台 | AI 决策 | MIDI 生成 | Logic Pro 实控 |
-|------|---------|-----------|---------------|
-| **macOS**（推荐） | ✅ 豆包 | ✅ 文件 + 虚拟端口实时 | ✅ AppleScript 全功能 |
-| Linux / Windows | ✅ 豆包 | ✅ 文件生成 | ⚠️ 模拟模式（仅生成 MIDI，不自动导入/导出） |
+| 平台 | 网页 AI 驱动 | MIDI 生成 | Logic Pro 实控 |
+|------|-------------|-----------|---------------|
+| **macOS**（推荐） | ✅ Playwright | ✅ 文件 + 虚拟端口实时 | ✅ AppleScript 全功能 |
+| Linux / Windows | ✅ Playwright | ✅ 文件生成 | ⚠️ 模拟模式（仅生成 MIDI，不自动导入/导出） |
 
-非 macOS 平台仍可完整体验 AI 决策与 MIDI 文件生成，便于开发与演示；最终的轨道创建、混音器操作与 Bounce 需要 macOS 上的 Logic Pro。
+非 macOS 平台仍可完整体验 AI 决策与 MIDI 文件生成；最终的轨道创建、混音器操作与 Bounce 需要 macOS 上的 Logic Pro。
 
-## 🔐 安全
+## 🔐 安全与合规
 
-- `config/config.yaml` 与 `.env` 已被 `.gitignore` 忽略，密钥不会入库。
-- API Key 仅存在本机内存与本地配置，前端展示时脱敏。
-- 服务默认仅监听 `127.0.0.1`，不对外暴露。
+- 不申请、不存储任何大模型 API Key；复用你本人已登录的网页 AI 会话。
+- `config/config.yaml` 与浏览器用户目录已被 `.gitignore` 忽略，不会入库。
+- 服务默认仅监听 `127.0.0.1`，不对外暴露；CDP 调试端口也仅本机。
+- 请遵守所使用网页 AI 的服务条款，自担使用风险。
 
 ## 📝 许可证
 
@@ -152,7 +169,8 @@ MIT — 见 [LICENSE](LICENSE)。
 
 ## 🙏 致谢
 
-- [豆包 / 火山方舟 Ark](https://www.volcengine.com/product/ark) — 大语言模型
+- [豆包](https://www.doubao.com) / [Kimi](https://kimi.moonshot.cn) / [通义千问](https://tongyi.aliyun.com) / [智谱清言](https://chatglm.cn) — 网页端 AI
 - [Logic Pro](https://www.apple.com/logic-pro/) — 数字音频工作站
+- [Playwright](https://playwright.dev) — 浏览器自动化
 - [mido](https://mido.readthedocs.io/) / [python-rtmidi](https://spoti9.github.io/rtmidi/) — MIDI 处理
 - [FastAPI](https://fastapi.tiangolo.com/) — 后端框架
