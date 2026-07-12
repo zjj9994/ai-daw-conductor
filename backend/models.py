@@ -255,3 +255,34 @@ class StageResult(BaseModel):
     # UI/工程动作
     actions: list[UIAction] = Field(default_factory=list, description="保存/撤销/视图切换等")
     rationale: Optional[str] = Field(default=None, description="创作思路解释")
+
+
+# ---------- 视觉驱动规划（基于 Logic Pro 截图） ----------
+class VisualStep(BaseModel):
+    """AI 看完 Logic Pro 截图后输出的「单步操作」。
+
+    视觉循环每次截图后让 AI 输出一个 VisualStep：
+    - 若 done=True 表示 AI 判定目标已达成，循环结束；
+    - 否则执行 actions 列表里的动作（复用 StageResult 的字段子集），
+      然后回到「截图 → 规划」进入下一轮，直到 done 或超步数。
+    AI 可按需输出任意动作字段子集，与 StageResult 一致。
+    """
+    observation: str = Field(description="AI 对当前截图的观察（中文）：看到了什么、状态如何")
+    plan: str = Field(description="这一步打算做什么（中文，简短）")
+    done: bool = Field(default=False, description="是否已达成最终目标（True 则结束视觉循环）")
+    # 复用 StageResult 的动作字段（按需输出子集）
+    transports: list[TransportAction] = Field(default_factory=list)
+    tracks: list[TrackSpec] = Field(default_factory=list)
+    track_stacks: list[TrackStackSpec] = Field(default_factory=list)
+    region_ops: list[RegionOp] = Field(default_factory=list)
+    mix: list[MixParams] = Field(default_factory=list)
+    buses: list[BusSpec] = Field(default_factory=list)
+    plugin_params: list[PluginParamSpec] = Field(default_factory=list)
+    automation: list[AutomationSpec] = Field(default_factory=list)
+    markers: list[MarkerSpec] = Field(default_factory=list)
+    tempo_changes: list[TempoChangeSpec] = Field(default_factory=list)
+    master_plugins: list[PluginSpec] = Field(default_factory=list)
+    record: Optional[RecordSpec] = Field(default=None)
+    bounce: Optional[BounceSpec] = Field(default=None)
+    actions: list[UIAction] = Field(default_factory=list)
+    rationale: Optional[str] = Field(default=None, description="为什么这么做（中文）")

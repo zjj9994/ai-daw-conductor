@@ -28,7 +28,7 @@ from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .ai_engine import AIEngine
 from .autonomous import AutonomousPipeline
@@ -38,7 +38,9 @@ from .daw_controller import DAWController
 from .diagnostics import run_diagnostics
 from .logging_config import setup_logging
 from .models import Stage
+from .screenshot import ScreenshotCapture
 from .task_tracker import TaskTracker, DEFAULT_HISTORY_FILE
+from .visual_loop import VisualLoop
 
 setup_logging()
 log = logging.getLogger("server")
@@ -46,10 +48,11 @@ log = logging.getLogger("server")
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 # 全局状态
-_state: dict = {"ai": None, "daw": None, "commander": None, "cfg": {}}
+_state: dict = {"ai": None, "daw": None, "commander": None, "screenshot": None, "cfg": {}}
 _ws_clients: set[WebSocket] = set()
 _current_task: Optional[asyncio.Task] = None
 _autonomous: Optional[AutonomousPipeline] = None
+_visual: Optional[VisualLoop] = None
 tracker = TaskTracker(history_file=DEFAULT_HISTORY_FILE)
 
 
@@ -57,7 +60,12 @@ def _build_engines(cfg: dict):
     ai = AIEngine(cfg)
     daw = DAWController(cfg, event_cb=broadcast, tracker=tracker)
     commander = Commander(ai, daw, tracker=tracker)
-    _state.update(ai=ai, daw=daw, commander=commander, cfg=cfg)
+    daw_cfg = cfg.get("daw", {})
+    screenshot = ScreenshotCapture(
+        app_name=daw_cfg.get("app_name", "Logic Pro"),
+        screenshot_dir=daw_cfg.get("screenshot_dir", "~/.ai-daw-conductor/screenshots"),
+    )
+    _state.update(ai=ai, daw=daw, commander=commander, screenshot=screenshot, cfg=cfg)
     return commander
 
 
@@ -300,10 +308,12 @@ async def api_autonomous(a: AutonomousIn):
 
 @app.post("/api/cancel")
 async def api_cancel():
-    global _current_task, _autonomous
-    # 优先通知自主流水线（它会级联取消 commander）
+    global _current_task, _autonomous, _visual
+    # 优先通知自主流水线与视觉循环（它们会级联取消 commander）
     if _autonomous:
         _autonomous.cancel()
+    if _visual:
+        _visual.cancel()
     if _state.get("commander"):
         _state["commander"].cancel()
     if _current_task and not _current_task.done():
@@ -403,6 +413,95 @@ async def api_browser_connect():
     except Exception as e:
         log.exception("浏览器连接失败")
         return {"ok": False, "error": str(e)}
+
+
+# ---------- 视觉驱动模式：AI 根据 Logic Pro 截图自主规划操作 ----------
+class VisualIn(BaseModel):
+    goal: str = Field(description="视觉规划目标，如「把副歌主旋律复制到第9小节并量化鼓组」")
+    max_steps: int = 20
+    settle_delay: float = 1.5
+
+
+@app.post("/api/visual")
+async def api_visual(v: VisualIn):
+    """启动视觉规划循环：AI 看着 Logic Pro 截图一步步精确操作，直到完成或超步数。
+
+    与 /api/pipeline、/api/autonomous 的区别：
+    - pipeline/autonomous 是「盲打」：AI 一次性输出整阶段动作清单；
+    - visual 是「看着打」：每步先截图观察 Logic Pro 实际状态，再决定下一步，
+      能根据屏幕实际反馈精确调整（如发现片段没对齐就再量化、混音器没开就先打开）。
+    需要 macOS（截图）+ 在线网页 AI（多模态视觉理解）。
+    """
+    global _current_task, _visual
+    if _current_task and not _current_task.done():
+        return JSONResponse({"ok": False, "error": "已有任务在运行，请先取消"}, status_code=409)
+    ai: AIEngine = _state["ai"]
+    daw: DAWController = _state["daw"]
+    screenshot: ScreenshotCapture = _state["screenshot"]
+    _visual = VisualLoop(
+        ai=ai, daw=daw, screenshot=screenshot, tracker=tracker,
+        max_steps=max(1, v.max_steps), settle_delay=max(0.1, v.settle_delay),
+    )
+
+    async def _run():
+        try:
+            await _visual.run(v.goal)
+            tracker.finish()
+        except asyncio.CancelledError:
+            tracker.cancel()
+        except Exception as e:
+            log.exception("visual 执行失败")
+            tracker.fail(str(e))
+            await broadcast({"type": "daw_event", "kind": "error", "message": str(e)})
+        finally:
+            await broadcast({"type": "daw_event", "kind": "task_finished"})
+
+    _current_task = asyncio.create_task(_run())
+    return {"ok": True, "mode": "visual", "goal": v.goal,
+            "max_steps": v.max_steps, "screenshot_available": screenshot.available}
+
+
+@app.post("/api/screenshot")
+async def api_screenshot(tag: str = "manual"):
+    """手动触发一次 Logic Pro 窗口截图，返回路径。"""
+    sc: ScreenshotCapture = _state["screenshot"]
+    if not sc:
+        return {"ok": False, "error": "截图工具未初始化"}
+    path = await sc.capture(tag=tag)
+    if not path:
+        return {"ok": False, "error": "截图失败（非 macOS 或 Logic Pro 未运行）",
+                "available": sc.available}
+    await broadcast({"type": "daw_event", "kind": "screenshot_captured",
+                     "step": 0, "path": path, "tag": tag})
+    return {"ok": True, "path": path, "available": sc.available}
+
+
+@app.get("/api/screenshot/latest")
+async def api_screenshot_latest():
+    """获取最近一次截图的路径与可下载文件。"""
+    sc: ScreenshotCapture = _state["screenshot"]
+    if not sc:
+        return {"ok": False, "error": "截图工具未初始化"}
+    latest = sc.latest
+    if not latest:
+        return {"ok": False, "error": "尚无截图", "available": sc.available}
+    return {"ok": True, "path": latest, "available": sc.available}
+
+
+@app.get("/api/screenshot/file")
+async def api_screenshot_file(path: str):
+    """下载/预览指定路径的截图文件（必须在 screenshot_dir 之下，防越权）。"""
+    sc: ScreenshotCapture = _state["screenshot"]
+    if not sc:
+        return JSONResponse({"error": "截图工具未初始化"}, status_code=500)
+    target = Path(path).expanduser()
+    try:
+        target.resolve().relative_to(sc.screenshot_dir.resolve())
+    except ValueError:
+        return JSONResponse({"error": "路径不在允许的目录内"}, status_code=403)
+    if not target.exists() or not target.is_file():
+        return JSONResponse({"error": "文件不存在"}, status_code=404)
+    return FileResponse(target, media_type="image/png", filename=target.name)
 
 
 # ---------- WebSocket ----------

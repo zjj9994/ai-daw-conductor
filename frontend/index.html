@@ -48,6 +48,7 @@
           <div class="stage-toggles" role="group" aria-label="阶段选择">
             <button class="stage-btn active" data-mode="pipeline">全流程</button>
             <button class="stage-btn" data-mode="autonomous" title="AI 不间断自主完成整首作品（含自评估、自动重连）">自主制作</button>
+            <button class="stage-btn" data-mode="visual" title="AI 根据 Logic Pro 实时截图一步步精确操作（视觉反馈闭环）">视觉操作</button>
             <button class="stage-btn" data-stage="compose">作曲</button>
             <button class="stage-btn" data-stage="arrange">编曲</button>
             <button class="stage-btn" data-stage="mix">混音</button>
@@ -133,6 +134,19 @@
         <label class="panel-label">AI 决策预览</label>
         <div id="ai-preview" class="ai-preview">
           <div class="empty">AI 回复将在此显示</div>
+        </div>
+      </div>
+
+      <div class="panel visual-panel" id="visual-panel">
+        <label class="panel-label">视觉操作 <span class="muted" id="visual-step-count">0</span>
+          <button class="ghost-btn mini" id="btn-screenshot" title="手动截一张 Logic Pro 窗口截图">截图</button>
+        </label>
+        <div class="visual-shot">
+          <div class="empty" id="visual-shot-empty">视觉模式下，AI 会根据 Logic Pro 截图自主规划操作</div>
+          <img id="visual-shot-img" alt="Logic Pro 截图" style="display:none;width:100%;border-radius:6px;" />
+        </div>
+        <div id="visual-steps" class="visual-steps">
+          <div class="empty">尚未启动视觉操作</div>
         </div>
       </div>
 

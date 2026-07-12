@@ -25,6 +25,7 @@ from typing import AsyncIterator, Optional
 from .models import (
     BounceSpec, MixParams, MidiRegionSpec, NoteSpec, PluginSpec,
     ProjectPlan, SendSpec, Stage, StageResult, TempoSpec, TrackSpec,
+    VisualStep,
 )
 from . import music_theory as mt
 
@@ -201,6 +202,68 @@ STAGE_PROMPTS = {
 }
 
 
+# ---------- 视觉驱动规划（基于 Logic Pro 截图） ----------
+VISUAL_SYSTEM = """你是世界级音乐制作人，正在通过截图观察用户屏幕上的 Logic Pro 窗口，像人类一样一步步精确操作它。
+
+你将收到：当前 Logic Pro 窗口的截图 + 用户的目标 + 历史操作记录。
+你必须只输出一个合法 JSON 对象（VisualStep），不要输出任何解释文字或 markdown 代码块。
+JSON 必须可被 python json.loads 直接解析，严格符合以下 schema：
+{
+  "observation": "对当前截图的观察（中文）：看到了什么、Logic Pro 当前状态（播放/停止/编辑哪个区）、轨道/片段/混音器/钢琴卷帘可见性等",
+  "plan": "这一步打算做什么（中文，简短）",
+  "done": false,
+  "transports": [{"op":"goto","bar":1}],
+  "tracks": [],
+  "region_ops": [],
+  "mix": [],
+  "buses": [],
+  "plugin_params": [],
+  "automation": [],
+  "markers": [],
+  "tempo_changes": [],
+  "master_plugins": [],
+  "record": null,
+  "bounce": null,
+  "actions": [],
+  "rationale": "为什么这么做（中文）"
+}
+
+动作字段全部复用 StageResult 的 schema（可按需输出子集，不需要的字段可省略或留空数组）。
+关键原则：
+- 像人类看着屏幕操作一样：先观察截图里 Logic Pro 的实际状态，再决定下一步；
+- 每次只输出「一步」可执行的操作（少量动作），不要一次规划整首作品；
+- 用 actions 切换视图（open_piano_roll/open_mixer/zoom_fit）让你能看清要操作的区域；
+- 用 transports 定位到要编辑的位置（goto/set_cycle）再操作片段；
+- 当你在截图里看到目标已达成（如导出完成、混音台已设好、片段已量化），把 done 设为 true；
+- 若截图与目标无关或 Logic Pro 未显示预期内容，用 actions 切换视图或 transports 定位；
+- observation 必须基于截图实际内容，不要臆测看不到的东西。
+"""
+
+VISUAL_SCHEMA = """
+返回的 JSON 结构（动作字段按需输出子集，与 StageResult 一致）：
+{
+  "observation": "截图观察（中文）",
+  "plan": "这一步计划（中文）",
+  "done": false,
+  "transports": [{"op":"play|stop|goto|set_cycle","bar":1,"start_bar":1,"end_bar":32}],
+  "tracks": [{"name":"主旋律","type":"software","instrument":"Piano","color":0}],
+  "track_stacks": [{"name":"鼓组","members":["底鼓"],"stack_type":"folder"}],
+  "region_ops": [{"op":"quantize|copy|move|transpose|split|loop","track":"鼓组","grid":"1/16","to_bar":9,"semitones":12}],
+  "mix": [{"track":"主旋律","volume_db":-6,"pan":0,"mute":false,"solo":false,"plugins":[],"sends":[]}],
+  "buses": [{"name":"Reverb Bus","input":"Bus 1","plugins":[{"name":"Space Designer","preset":"Large Hall"}]}],
+  "plugin_params": [{"track":"鼓组","plugin":"Compressor","parameter":"Threshold","value":-20}],
+  "automation": [{"track":"主旋律","parameter":"Volume","mode":"latch","points":[{"bar":1,"value":-6,"shape":"linear"}]}],
+  "markers": [{"name":"Chorus","bar":9,"length_bars":8}],
+  "tempo_changes": [{"bar":17,"bpm":104,"ramp":true}],
+  "master_plugins": [{"name":"Limiter","preset":"Loud"}],
+  "record": {"track":"人声","armed":true,"count_in":1,"autopunch":{"start_bar":9,"end_bar":16}},
+  "bounce": {"format":"wav","bit_depth":24,"sample_rate":44100,"filename":"final","stems":false},
+  "actions": [{"op":"save|open_mixer|open_piano_roll|zoom_fit|undo"}],
+  "rationale": "为什么这么做（中文）"
+}
+"""
+
+
 class WebAIDriver:
     """通过 Playwright 驱动用户已登录的网页 AI。"""
 
@@ -330,6 +393,83 @@ class WebAIDriver:
         if log_cb:
             await log_cb("info", f"网页 AI 回复已抓取（{len(text)} 字）")
         return text
+
+    async def chat_with_image(self, prompt: str, image_path: str,
+                              log_cb=None, new_chat: bool = False) -> str:
+        """向网页 AI 发送「图片 + 文本」多模态消息，返回助手回复文本。
+
+        实现策略：先找到页面里的文件上传 input（input[type=file]）并 set_input_files
+        注入截图，等几秒让图片预览/识别完成，再输入 prompt 文本并发送。
+        各家网页 AI 的上传入口不同，这里用多策略兜底：
+          1. 直接找 input[type=file]（最通用）
+          2. 点击「上传图片/附件」按钮触发文件选择，再 set_input_files
+        若上传失败则退化为纯文本 chat（提示 AI 缺少视觉输入）。
+        """
+        page = await self.ensure_page()
+        if log_cb:
+            await log_cb("info", f"向网页 AI 注入截图+提示（图片 {image_path}，提示 {len(prompt)} 字）...")
+
+        if new_chat:
+            await self._start_new_chat(page, log_cb)
+            await page.wait_for_timeout(800)
+
+        uploaded = await self._upload_image(page, image_path, log_cb)
+        if not uploaded and log_cb:
+            await log_cb("warn", "截图上传失败，退化为纯文本模式（AI 将缺少视觉输入）。")
+
+        before_count = await self._assistant_msg_count(page)
+        await self._type_and_send(page, prompt)
+        await self._wait_for_completion(page, before_count, log_cb)
+
+        text = await self._last_assistant_text(page)
+        if log_cb:
+            await log_cb("info", f"网页 AI 回复已抓取（{len(text)} 字）")
+        return text
+
+    async def _upload_image(self, page, image_path: str, log_cb=None) -> bool:
+        """把图片上传到网页 AI 输入框。返回是否成功。"""
+        from pathlib import Path
+        p = Path(image_path).expanduser()
+        if not p.exists():
+            log.warning("截图文件不存在：%s", image_path)
+            return False
+
+        # 策略 1：直接找 input[type=file]
+        try:
+            file_input = page.locator("input[type='file']").first
+            if await file_input.count():
+                await file_input.set_input_files(str(p))
+                # 等待图片预览/识别
+                await page.wait_for_timeout(2500)
+                if log_cb:
+                    await log_cb("info", "截图已上传到网页 AI。")
+                return True
+        except Exception as e:
+            log.debug("input[type=file] 上传失败：%s", e)
+
+        # 策略 2：点击「上传图片/附件」按钮触发文件选择框，再监听 filechooser
+        upload_btn_selectors = [
+            "button:has-text('上传')", "button:has-text('图片')",
+            "button:has-text('附件')", "[class*='upload']", "[class*='attach']",
+            "[class*='image-btn']", "button[aria-label*='上传']", "button[aria-label*='图片']",
+        ]
+        for sel in upload_btn_selectors:
+            try:
+                btn = page.locator(sel).first
+                if await btn.count():
+                    async with page.expect_file_chooser(timeout=5000) as fc_info:
+                        await btn.click()
+                    file_chooser = await fc_info.value
+                    await file_chooser.set_files(str(p))
+                    await page.wait_for_timeout(2500)
+                    if log_cb:
+                        await log_cb("info", f"截图已通过 {sel} 上传到网页 AI。")
+                    return True
+            except Exception:
+                continue
+
+        log.warning("未找到网页 AI 的图片上传入口。")
+        return False
 
     async def _start_new_chat(self, page, log_cb=None):
         """点击「新对话」按钮，避免上一阶段的上下文污染本阶段决策。"""
@@ -824,6 +964,61 @@ class AIEngine:
                               normalize=False, filename="ai_daw_conductor_master"),
             rationale="母带链先修整低频淤积，再用胶合压缩提升密度，最后限制器推响度至流媒体标准。",
         )
+
+    async def plan_from_screenshot(
+        self,
+        goal: str,
+        image_path: str,
+        history: str = "",
+        log_cb=None,
+    ) -> VisualStep:
+        """让网页 AI 看着 Logic Pro 截图，输出下一步操作（VisualStep）。
+
+        Args:
+            goal: 用户的最终目标（如「把副歌主旋律复制到第9小节」）
+            image_path: Logic Pro 窗口截图路径
+            history: 之前已执行的操作记录（让 AI 知道已经做了什么，避免重复）
+        Returns:
+            VisualStep：AI 的观察、计划、动作清单、是否完成
+        """
+        prompt = (
+            VISUAL_SYSTEM + "\n" + VISUAL_SCHEMA + "\n"
+            + f"用户目标：{goal}\n"
+            + (f"已执行操作记录：\n{history}\n" if history else "（尚无历史操作）\n")
+            + "请基于截图观察 Logic Pro 当前状态，输出下一步操作。"
+            + "若目标已达成，done 设为 true 并在 observation 说明依据。"
+            + "\n\n请只输出上述 schema 的 JSON 对象，不要包裹在 markdown 代码块里。"
+        )
+        if not self._use_web:
+            # demo 模式：无法真正看图，返回一个空步并标记完成避免死循环
+            if log_cb:
+                await log_cb("warn", "demo 模式无法做视觉规划，直接返回完成。")
+            return VisualStep(
+                observation="demo 模式：未连接网页 AI，无法识别截图。",
+                plan="跳过视觉规划",
+                done=True,
+                rationale="demo 模式无视觉能力，直接结束视觉循环。",
+            )
+        try:
+            raw = await self.driver.chat_with_image(prompt, image_path, log_cb=log_cb, new_chat=False)
+            data = self._extract_json(raw)
+            if data is None:
+                raise ValueError(f"未能从视觉回复中解析 JSON（前80字：{raw[:80]!r}）")
+            step = VisualStep.model_validate(data)
+            if raw and not step.rationale:
+                step.rationale = raw[:200]
+            return step
+        except Exception as e:
+            log.warning("视觉规划失败：%s", e)
+            if log_cb:
+                await log_cb("error", f"视觉规划失败：{e}")
+            # 失败时返回一个 done 步，避免视觉循环死循环
+            return VisualStep(
+                observation=f"视觉规划失败：{e}",
+                plan="终止视觉循环",
+                done=True,
+                rationale="网页 AI 调用失败，终止视觉循环以防死循环。",
+            )
 
     async def close(self):
         await self.driver.close()

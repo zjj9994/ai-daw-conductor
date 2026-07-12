@@ -6,7 +6,7 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 
 // ---------- 状态 ----------
 const state = {
-  mode: "pipeline",       // pipeline | stage | autonomous
+  mode: "pipeline",       // pipeline | stage | autonomous | visual
   stage: "compose",
   running: false,
   tracks: [],
@@ -14,6 +14,7 @@ const state = {
   pollTimer: null,        // 任务状态轮询计时器
   lastPrompt: "",         // 最近一次创作指令（用于重试）
   selfEval: true,         // 自主模式是否启用自评估
+  visualStepCount: 0,     // 视觉模式已执行步数
 };
 
 const STAGE_NAMES = { compose: "作曲", arrange: "编曲", mix: "混音", master: "母带" };
@@ -21,6 +22,7 @@ const MODE_LABELS = {
   pipeline: "全流程",
   stage: "单阶段",
   autonomous: "自主制作",
+  visual: "视觉操作",
 };
 
 // ---------- WebSocket ----------
@@ -105,6 +107,32 @@ function handle(evt) {
       break;
     case "project_saved":
       addLog("info", "工程已保存", "event");
+      break;
+    case "visual_start":
+      addLog("info", `视觉规划启动：目标「${evt.goal}」（最多 ${evt.max_steps} 步）`, "event");
+      state.visualStepCount = 0;
+      $("#visual-step-count").textContent = "0";
+      $("#visual-steps").innerHTML = '<div class="empty">等待 AI 看图规划...</div>';
+      break;
+    case "screenshot_captured":
+      updateVisualScreenshot(evt.path);
+      if (evt.step && evt.step > 0) {
+        addLog("info", `截图完成（步骤 ${evt.step}）`, "event");
+      }
+      break;
+    case "visual_step":
+      addVisualStep(evt);
+      break;
+    case "visual_done":
+      if (evt.reason === "no_ai") {
+        addLog("warn", "视觉模式需先在设置里连接网页 AI。", "event");
+      } else if (evt.reason === "no_screenshot") {
+        addLog("warn", "截图失败（非 macOS 或 Logic Pro 未运行），视觉循环终止。", "event");
+      } else if (evt.reason === "max_steps") {
+        addLog("warn", `视觉循环达最大步数 ${evt.steps} 停止（AI 未判定完成）。`, "event");
+      } else {
+        addLog("info", `✓ 视觉规划完成（共 ${evt.steps} 步）`, "event");
+      }
       break;
     case "bounce_done":
       renderBounce(evt.path);
@@ -299,6 +327,43 @@ function regionOpLabel(evt) {
   return `片段操作：「${evt.track || "-"}」${map[evt.op] || evt.op}`;
 }
 
+// ---------- 视觉模式 ----------
+function updateVisualScreenshot(path) {
+  if (!path) return;
+  const img = $("#visual-shot-img");
+  const empty = $("#visual-shot-empty");
+  if (!img) return;
+  // 用服务端接口读取截图文件，加时间戳防缓存
+  img.src = `/api/screenshot/file?path=${encodeURIComponent(path)}&_t=${Date.now()}`;
+  img.style.display = "block";
+  if (empty) empty.style.display = "none";
+}
+
+function addVisualStep(evt) {
+  const box = $("#visual-steps");
+  if (!box) return;
+  if (box.querySelector(".empty")) box.innerHTML = "";
+  state.visualStepCount = (state.visualStepCount || 0) + 1;
+  $("#visual-step-count").textContent = state.visualStepCount;
+
+  const card = document.createElement("div");
+  card.className = "visual-step-card" + (evt.done ? " done" : "");
+  const tag = evt.done ? "✓ 完成" : `步骤 ${evt.step}`;
+  card.innerHTML = `<div class="vs-head"><span class="vs-tag">${tag}</span></div>
+    <div class="vs-obs"></div>
+    <div class="vs-plan"></div>`;
+  card.querySelector(".vs-obs").textContent = "观察：" + (evt.observation || "");
+  card.querySelector(".vs-plan").textContent = "计划：" + (evt.plan || "");
+  if (evt.rationale) {
+    const r = document.createElement("div");
+    r.className = "vs-rationale";
+    r.textContent = "理由：" + evt.rationale;
+    card.appendChild(r);
+  }
+  box.appendChild(card);
+  box.scrollTop = box.scrollHeight;
+}
+
 function addRenderHistory(filename, path, idx) {
   const box = $("#render-history");
   if (box.querySelector(".empty")) box.innerHTML = "";
@@ -467,6 +532,8 @@ $$(".stage-btn").forEach((btn) => {
       state.mode = "pipeline";
     } else if (btn.dataset.mode === "autonomous") {
       state.mode = "autonomous";
+    } else if (btn.dataset.mode === "visual") {
+      state.mode = "visual";
     } else {
       state.mode = "stage";
       state.stage = btn.dataset.stage;
@@ -491,10 +558,18 @@ $("#btn-run").addEventListener("click", async () => {
   $("#track-count").textContent = "0";
   setRunning(true);
   addLog("info", `开始任务（${MODE_LABELS[state.mode] || state.mode}）`, "event");
+  // 视觉模式重置步骤计数与面板
+  state.visualStepCount = 0;
+  $("#visual-step-count").textContent = "0";
+  $("#visual-steps").innerHTML = '<div class="empty">等待 AI 看图规划...</div>';
 
   try {
     let url, body;
-    if (state.mode === "autonomous") {
+    if (state.mode === "visual") {
+      url = "/api/visual";
+      body = { goal: prompt || "检查并完善当前 Logic Pro 工程", max_steps: 20, settle_delay: 1.5 };
+      addLog("info", "视觉模式：AI 将根据 Logic Pro 截图一步步精确操作。", "event");
+    } else if (state.mode === "autonomous") {
       url = "/api/autonomous";
       body = { prompt, enable_self_eval: state.selfEval, max_stage_retries: 2 };
       addLog("info", "自主模式：AI 将不间断完成整首作品，含自评估与自动重连。", "event");
@@ -767,5 +842,23 @@ const btnSaveTpl = $("#btn-save-template");
 if (btnSaveTpl) btnSaveTpl.addEventListener("click", saveCurrentAsTemplate);
 const chkSelfEval = $("#chk-self-eval");
 if (chkSelfEval) chkSelfEval.addEventListener("change", () => { state.selfEval = chkSelfEval.checked; });
+
+// 视觉模式：手动截图按钮
+const btnScreenshot = $("#btn-screenshot");
+if (btnScreenshot) btnScreenshot.addEventListener("click", async () => {
+  addLog("info", "正在截取 Logic Pro 窗口...", "event");
+  try {
+    const res = await fetch("/api/screenshot?tag=manual", { method: "POST" });
+    const j = await res.json();
+    if (j.ok) {
+      updateVisualScreenshot(j.path);
+      addLog("info", "截图完成", "event");
+    } else {
+      addLog("warn", `截图失败：${j.error || "未知错误"}`, "event");
+    }
+  } catch (e) {
+    addLog("error", `截图请求失败：${e}`, "log");
+  }
+});
 
 connect();
