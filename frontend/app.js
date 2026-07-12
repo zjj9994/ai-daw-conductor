@@ -73,6 +73,39 @@ function handle(evt) {
     case "master_applied":
       addLog("info", `母带链：${evt.plugins.map((p) => p.name).join(" → ")}`, "event");
       break;
+    case "transport":
+      addLog("info", transportLabel(evt), "event");
+      break;
+    case "region_op":
+      addLog("info", regionOpLabel(evt), "event");
+      break;
+    case "marker_added":
+      addLog("info", `标记：${evt.name} @ 小节 ${evt.bar}`, "event");
+      break;
+    case "tempo_change":
+      addLog("info", `速度变化：${evt.bpm}BPM @ 小节 ${evt.bar}${evt.ramp ? "（渐变）" : ""}`, "event");
+      break;
+    case "bus_created":
+      addLog("info", `总线「${evt.name}」已创建（${evt.plugins.length} 个插件）`, "event");
+      break;
+    case "plugin_param":
+      addLog("info", `插件参数：${evt.track}/${evt.plugin}/${evt.parameter} = ${evt.value}`, "event");
+      break;
+    case "automation":
+      addLog("info", `自动化：${evt.track}/${evt.parameter}（${evt.point_count} 点，${evt.mode}）`, "event");
+      break;
+    case "record_setup":
+      addLog("info", `录音准备：${evt.track}（armed=${evt.armed}）`, "event");
+      break;
+    case "track_stack_created":
+      addLog("info", `轨道堆栈「${evt.name}」：${evt.members.join("、")}`, "event");
+      break;
+    case "ui_action":
+      addLog("info", `UI：${evt.op}`, "event");
+      break;
+    case "project_saved":
+      addLog("info", "工程已保存", "event");
+      break;
     case "bounce_done":
       renderBounce(evt.path);
       // 不直接 add（无索引无法下载），改为拉取服务端历史以保证下载链接可用
@@ -244,6 +277,26 @@ function renderAIPreview(stage, summary, rationale) {
   card.querySelector(".rationale").textContent = rationale ? "AI 思路：" + rationale : "";
   box.appendChild(card);
   box.scrollTop = box.scrollHeight;
+}
+
+function transportLabel(evt) {
+  const map = {
+    play: "▶ 播放", stop: "■ 停止", pause: "⏸ 暂停", record: "● 录音",
+    goto: `定位 → 小节 ${evt.bar || 1}`, rewind: "◀ 倒退", forward: "▶ 前进",
+    toggle_loop: "切换循环",
+    set_cycle: `循环区：小节 ${evt.start_bar}-${evt.end_bar}`,
+    set_loop: `循环区：小节 ${evt.start_bar}-${evt.end_bar}`,
+  };
+  return "传输：" + (map[evt.op] || evt.op);
+}
+
+function regionOpLabel(evt) {
+  const map = {
+    split: "切割", join: "合并", move: `移动 → 小节 ${evt.to_bar || 1}`,
+    copy: `复制 → 小节 ${evt.to_bar || 1}`, delete: "删除", loop: "循环",
+    resize: "调整长度", quantize: "量化", transpose: "移调", crop: "裁剪",
+  };
+  return `片段操作：「${evt.track || "-"}」${map[evt.op] || evt.op}`;
 }
 
 function addRenderHistory(filename, path, idx) {

@@ -96,16 +96,37 @@ PROVIDER_PROFILES = {
 DEFAULT_SELECTORS = PROVIDER_PROFILES["custom"]
 
 
-SYSTEM_BASE = """你是世界级音乐制作人，精通 Logic Pro 工作流，将自主、不间断地完成一整首作品。
+SYSTEM_BASE = """你是世界级音乐制作人，精通 Logic Pro 全部工作流，将自主、不间断地完成一整首作品。
 你必须只输出一个合法 JSON 对象，不要输出任何解释文字、markdown 代码块或注释。
 JSON 必须可被 python json.loads 直接解析，并严格符合给定的 schema。
 所有文本字段（summary、rationale、name、title、genre、description、instrument 等）使用简体中文。
 音高 pitch 可以是 MIDI 数字（如 60）或音名（如 'C4'）；时间 start/duration 单位为「拍(beat)」。
 
+你能像人类一样全面操作 Logic Pro，可输出以下任一字段（按阶段需要）：
+- project: 新建工程（标题/风格/速度/调性/段落结构）
+- tempo_changes: 速度变化点（支持渐变 ramp，像人类画速度曲线）
+- markers: 编排标记/段落标记（在编排区定结构，如 Verse/Chorus/Outro）
+- tracks: 创建轨道（software/audio/drummer/aux，可设颜色/图标/编组/冻结/隐藏）
+- track_stacks: 创建轨道堆栈（folder/summing，把相关轨道打包）
+- regions: 写入 MIDI 片段（音符/力度/时值）
+- region_ops: 编辑已有片段（split切割/move移动/copy复制/loop循环/quantize量化/transpose移调/resize）
+- transports: 传输控制（play播放/stop停止/record录音/goto定位/set_cycle循环区）
+- buses: 新建辅助通道/总线（如 Reverb Bus，可挂插件）
+- mix: 混音（音量/声相/静音/独奏/EQ/插件链/发送/输入监听）
+- plugin_params: 插件参数微调（像人类拧 Threshold/Ratio/Gain 旋钮）
+- automation: 自动化曲线（Volume/Pan/Send/Plugin 参数的读写，含触控/锁定模式）
+- record: 录音设置（armed/count_in/autopunch 自动穿插）
+- master_plugins: 母带插件链
+- bounce: 导出（wav/mp3，可分轨 stems，可指定小节范围）
+- actions: UI/工程动作（save保存/undo撤销/open_piano_roll/open_mixer/zoom_fit 等）
+
 关键原则：
 - 整首作品必须连贯：段落之间有逻辑递进（如前奏→主歌→副歌→桥段→尾奏），调性统一，速度一致。
 - 后续阶段必须延续前一阶段已确定的标题、调性、速度、段落结构与轨道命名，不得推翻重来。
 - 你的目标是产出完整的、可独立播放的成品，而非片段 demo。
+- 像人类制作人一样思考：先定结构再写音符，先建总线再发发送，先定位再混音，最后母带与导出。
+- 充分运用 region_ops 做人性化编辑（量化鼓组、移调副旋律、循环段落），让作品更专业。
+- 在 mix 阶段用 automation 让音乐有动态起伏（如副歌提升音量、尾奏渐弱）。
 """
 
 SCHEMA_DESC = """
@@ -114,11 +135,21 @@ SCHEMA_DESC = """
   "stage": "compose|arrange|mix|master",
   "summary": "本阶段决策简述（中文）",
   "project": {"title":"作品名","genre":"风格","tempo":{"bpm":100,"time_signature":"4/4","key":"C minor"},"structure":["intro","verse","chorus","verse","chorus","bridge","chorus","outro"],"key":"C minor","description":"作品创意描述"},
-  "tracks": [{"name":"主旋律","type":"software","instrument":"Acoustic Grand Piano"}],
+  "tempo_changes": [{"bar":17,"bpm":104,"ramp":true}],
+  "markers": [{"name":"Verse 1","bar":1,"length_bars":8,"color":10},{"name":"Chorus","bar":9,"length_bars":8}],
+  "tracks": [{"name":"主旋律","type":"software","instrument":"Acoustic Grand Piano","color":0,"icon":"Piano","freeze":false}],
+  "track_stacks": [{"name":"鼓组","members":["底鼓","军鼓","踩镲"],"stack_type":"folder"}],
   "regions": [{"track":"主旋律","start":0,"instrument":"Acoustic Grand Piano","notes":[{"pitch":"C4","start":0,"duration":1,"velocity":90}]}],
+  "region_ops": [{"op":"quantize","track":"鼓组","grid":"1/16","strength":80},{"op":"copy","track":"主旋律","at_bar":1,"to_bar":9},{"op":"transpose","track":"副旋律","semitones":12}],
+  "transports": [{"op":"goto","bar":1},{"op":"set_cycle","start_bar":1,"end_bar":32}],
+  "buses": [{"name":"Reverb Bus","input":"Bus 1","plugins":[{"name":"Space Designer","preset":"Large Hall"}]}],
   "mix": [{"track":"主旋律","volume_db":-6,"pan":0,"mute":false,"solo":false,"plugins":[{"name":"Channel EQ","preset":"Vocal"}],"sends":[{"target":"Reverb Bus","amount":0.3}]}],
+  "plugin_params": [{"track":"鼓组","plugin":"Compressor","parameter":"Threshold","value":-20},{"track":"主旋律","plugin":"Channel EQ","parameter":"Gain","value":2.5}],
+  "automation": [{"track":"主旋律","parameter":"Volume","mode":"latch","points":[{"bar":1,"value":-6,"shape":"linear"},{"bar":9,"value":-3,"shape":"linear"},{"bar":33,"value":-12,"shape":"curve"}]}],
+  "record": {"track":"人声","armed":true,"count_in":1,"autopunch":{"start_bar":9,"end_bar":16}},
   "master_plugins": [{"name":"Limiter","preset":"Loud"}],
-  "bounce": {"format":"wav","bit_depth":24,"sample_rate":44100,"normalize":false,"filename":"final_master"},
+  "bounce": {"format":"wav","bit_depth":24,"sample_rate":44100,"normalize":false,"filename":"final_master","stems":false},
+  "actions": [{"op":"save"},{"op":"open_mixer"}],
   "rationale": "创作思路解释（中文）"
 }
 """
@@ -131,28 +162,41 @@ STAGE_PROMPTS = {
 - 段落结构至少 4 段（建议 intro-verse-chorus-verse-chorus-bridge-chorus-outro 等完整流行曲式）；
 - 为每个段落在相应轨道上给出音符（start 相对全曲的拍数）；总长度 16-32 小节；
 - 在 project.structure 里明确列出段落顺序与每段的小节数（可写在 description 里）；
+- 用 markers 在编排区标注每个段落（如 Verse 1 @ 小节1、Chorus @ 小节9），让后续阶段能精准定位；
+- 可在 tempo_changes 里设计速度变化（如 bridge 段稍慢、终曲稍快），让作品有情绪起伏；
 - rationale 里说明动机发展、段落对比与情感走向，让后续阶段能延续你的创意。""",
     Stage.ARRANGE: """阶段：编曲（arrange）—— 必须延续作曲阶段确定的标题/调性/速度/段落结构。
-在已有作曲基础上完成：决定乐器配置与各声部 MIDI。
+在已有作曲基础上完成：决定乐器配置与各声部 MIDI，并用 region_ops 做人性化编辑。
 要求：
 - 不得修改已有的主旋律与和弦轨道内容，只能新增轨道；
 - 新增鼓组、贝斯、和声铺底、装饰/副旋律等轨道并编写 MIDI 片段；
 - 鼓组用 MIDI 数字：底鼓 36、军鼓 38、踩镲 42、开镲 46、嗵鼓 50/48、镲 49；
 - 贝斯走根音与节奏支撑，和声铺底用长音 pad；各 region 的 start 要对齐段落；
-- 根据段落属性安排密度：intro 稀疏、verse 适中、chorus 饱满、bridge 做对比。""",
+- 根据段落属性安排密度：intro 稀疏、verse 适中、chorus 饱满、bridge 做对比；
+- 用 region_ops 做人类式编辑：用 copy 把副歌主旋律复制到各次副歌、用 quantize 量化鼓组到 1/16、
+  用 transpose 给副旋律移调做八度对比、用 loop 循环鼓组片段贯穿全曲；
+- 可用 track_stacks 把鼓组打包成文件夹轨道，让工程更整洁；
+- rationale 说明编曲层次与各段落乐器进出设计。""",
     Stage.MIX: """阶段：混音（mix）—— 必须覆盖前两阶段产生的所有轨道。
-为所有已有轨道设置音量、声相、均衡、压缩、发送等。
+为所有已有轨道设置音量、声相、均衡、压缩、发送等，并用 automation 与 plugin_params 做动态混音。
 要求：
 - 主旋律/人声靠中、-3dB 左右；贝斯居中 -6dB；鼓组分轨设声相；
 - 给鼓组加 Channel EQ + Compressor，给人声加 DeEsser + Reverb 发送；
-- 建立一条 Reverb Bus 辅助通道并让需要空间的轨道发送；
+- 用 buses 建立一条 Reverb Bus 辅助通道（挂 Space Designer）并让需要空间的轨道发送；
+- 用 plugin_params 精调插件参数（如鼓组 Compressor Threshold=-20、Ratio=4、主旋律 EQ 高频+2.5dB）；
+- 用 automation 写自动化曲线让音乐有动态：副歌提升主旋律音量 -3dB、尾奏渐弱到 -12dB、
+  鼓组在 bridge 静音 automation、副歌踩镲声相微动；
+- 用 transports 定位到关键段落检查（如 goto 副歌小节）；
 - 输出 mix 数组覆盖全部已有轨道（主旋律、和弦、鼓组、贝斯、铺底等），不得遗漏。""",
     Stage.MASTER: """阶段：母带（master）—— 整首作品的最后一步，输出最终成品。
-在主输出施加母带链并设置导出参数。
+在主输出施加母带链并设置导出参数，可同时导出分轨。
 要求：
 - 顺序 Channel EQ（修整低频）-> Compressor（胶合）-> Limiter（响度）；
 - Limiter 目标 -1 dBTP，响度约 -14 LUFS；
-- 给出 bounce 导出参数（wav/24bit/44100Hz）；
+- 用 plugin_params 精调母带链参数（如 Limiter Ceiling=-1.0、Compressor Threshold=-14、Ratio=2）；
+- 用 automation 让母带链在尾奏轻微提亮（EQ 高频自动化）；
+- 给出 bounce 导出参数（wav/24bit/44100Hz）；如需交付混音师可设 stems=true 分轨导出；
+- 可用 actions 在导出前 save 保存工程；
 - rationale 里总结整首作品的制作思路与最终听感目标。""",
 }
 
