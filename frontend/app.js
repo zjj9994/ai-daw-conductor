@@ -6,16 +6,22 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 
 // ---------- 状态 ----------
 const state = {
-  mode: "pipeline",       // pipeline | stage
+  mode: "pipeline",       // pipeline | stage | autonomous
   stage: "compose",
   running: false,
   tracks: [],
   logCount: 0,
   pollTimer: null,        // 任务状态轮询计时器
   lastPrompt: "",         // 最近一次创作指令（用于重试）
+  selfEval: true,         // 自主模式是否启用自评估
 };
 
 const STAGE_NAMES = { compose: "作曲", arrange: "编曲", mix: "混音", master: "母带" };
+const MODE_LABELS = {
+  pipeline: "全流程",
+  stage: "单阶段",
+  autonomous: "自主制作",
+};
 
 // ---------- WebSocket ----------
 let ws = null;
@@ -406,6 +412,8 @@ $$(".stage-btn").forEach((btn) => {
     btn.classList.add("active");
     if (btn.dataset.mode === "pipeline") {
       state.mode = "pipeline";
+    } else if (btn.dataset.mode === "autonomous") {
+      state.mode = "autonomous";
     } else {
       state.mode = "stage";
       state.stage = btn.dataset.stage;
@@ -429,13 +437,21 @@ $("#btn-run").addEventListener("click", async () => {
   $("#ai-preview").innerHTML = '<div class="empty">AI 回复将在此显示</div>';
   $("#track-count").textContent = "0";
   setRunning(true);
-  addLog("info", `开始任务（${state.mode === "pipeline" ? "全流程" : state.stage}）`, "event");
+  addLog("info", `开始任务（${MODE_LABELS[state.mode] || state.mode}）`, "event");
 
   try {
-    const url = state.mode === "pipeline" ? "/api/pipeline" : "/api/stage";
-    const body = state.mode === "pipeline"
-      ? { prompt }
-      : { stage: state.stage, prompt, bpm: 100 };
+    let url, body;
+    if (state.mode === "autonomous") {
+      url = "/api/autonomous";
+      body = { prompt, enable_self_eval: state.selfEval, max_stage_retries: 2 };
+      addLog("info", "自主模式：AI 将不间断完成整首作品，含自评估与自动重连。", "event");
+    } else if (state.mode === "pipeline") {
+      url = "/api/pipeline";
+      body = { prompt };
+    } else {
+      url = "/api/stage";
+      body = { stage: state.stage, prompt, bpm: 100 };
+    }
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -646,5 +662,7 @@ const btnClearRenders = $("#btn-clear-renders");
 if (btnClearRenders) btnClearRenders.addEventListener("click", clearRenderHistory);
 const btnSaveTpl = $("#btn-save-template");
 if (btnSaveTpl) btnSaveTpl.addEventListener("click", saveCurrentAsTemplate);
+const chkSelfEval = $("#chk-self-eval");
+if (chkSelfEval) chkSelfEval.addEventListener("change", () => { state.selfEval = chkSelfEval.checked; });
 
 connect();

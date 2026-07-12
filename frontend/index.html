@@ -47,14 +47,18 @@
         <div class="prompt-actions">
           <div class="stage-toggles" role="group" aria-label="阶段选择">
             <button class="stage-btn active" data-mode="pipeline">全流程</button>
+            <button class="stage-btn" data-mode="autonomous" title="AI 不间断自主完成整首作品（含自评估、自动重连）">自主制作</button>
             <button class="stage-btn" data-stage="compose">作曲</button>
             <button class="stage-btn" data-stage="arrange">编曲</button>
             <button class="stage-btn" data-stage="mix">混音</button>
             <button class="stage-btn" data-stage="master">母带</button>
           </div>
           <div class="run-actions">
+            <label class="self-eval-toggle" title="自主模式下让 AI 自评产出质量，不达标自动重做">
+              <input type="checkbox" id="chk-self-eval" checked /> 自评估
+            </label>
             <button id="btn-retry" class="ghost-btn" style="display:none">重试阶段</button>
-            <button id="btn-cancel" class="ghost-btn warn" disabled>取消</button>
+            <button id="btn-cancel" class="ghost-btn warn" disabled>中断</button>
             <button id="btn-run" class="primary-btn">开始制作</button>
           </div>
         </div>

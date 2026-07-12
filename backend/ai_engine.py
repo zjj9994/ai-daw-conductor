@@ -96,11 +96,16 @@ PROVIDER_PROFILES = {
 DEFAULT_SELECTORS = PROVIDER_PROFILES["custom"]
 
 
-SYSTEM_BASE = """你是世界级音乐制作人，精通 Logic Pro 工作流。
+SYSTEM_BASE = """你是世界级音乐制作人，精通 Logic Pro 工作流，将自主、不间断地完成一整首作品。
 你必须只输出一个合法 JSON 对象，不要输出任何解释文字、markdown 代码块或注释。
 JSON 必须可被 python json.loads 直接解析，并严格符合给定的 schema。
 所有文本字段（summary、rationale、name、title、genre、description、instrument 等）使用简体中文。
 音高 pitch 可以是 MIDI 数字（如 60）或音名（如 'C4'）；时间 start/duration 单位为「拍(beat)」。
+
+关键原则：
+- 整首作品必须连贯：段落之间有逻辑递进（如前奏→主歌→副歌→桥段→尾奏），调性统一，速度一致。
+- 后续阶段必须延续前一阶段已确定的标题、调性、速度、段落结构与轨道命名，不得推翻重来。
+- 你的目标是产出完整的、可独立播放的成品，而非片段 demo。
 """
 
 SCHEMA_DESC = """
@@ -119,24 +124,36 @@ SCHEMA_DESC = """
 """
 
 STAGE_PROMPTS = {
-    Stage.COMPOSE: """阶段：作曲（compose）
+    Stage.COMPOSE: """阶段：作曲（compose）—— 这是整首作品的根基，后续所有阶段都基于你现在的决策。
 请完成：确定作品标题、风格、速度、调性、段落结构，并生成主旋律与和声的 MIDI 音符。
-要求：主旋律要有记忆点、符合调性、节奏自然；至少给出主旋律、和弦/和声两轨；
-段落结构至少 4 段；为每个段落在相应轨道上给出音符（start 相对全曲的拍数）；总长度 16-32 小节。""",
-    Stage.ARRANGE: """阶段：编曲（arrange）
+要求：
+- 主旋律要有记忆点、符合调性、节奏自然；至少给出主旋律、和弦/和声两轨；
+- 段落结构至少 4 段（建议 intro-verse-chorus-verse-chorus-bridge-chorus-outro 等完整流行曲式）；
+- 为每个段落在相应轨道上给出音符（start 相对全曲的拍数）；总长度 16-32 小节；
+- 在 project.structure 里明确列出段落顺序与每段的小节数（可写在 description 里）；
+- rationale 里说明动机发展、段落对比与情感走向，让后续阶段能延续你的创意。""",
+    Stage.ARRANGE: """阶段：编曲（arrange）—— 必须延续作曲阶段确定的标题/调性/速度/段落结构。
 在已有作曲基础上完成：决定乐器配置与各声部 MIDI。
-要求：新增鼓组、贝斯、和声铺底、装饰/副旋律等轨道并编写 MIDI 片段；
-鼓组用 MIDI 数字：底鼓 36、军鼓 38、踩镲 42、开镲 46、嗵鼓 50/48、镲 49；
-贝斯走根音与节奏支撑，和声铺底用长音 pad；各 region 的 start 要对齐段落。""",
-    Stage.MIX: """阶段：混音（mix）
+要求：
+- 不得修改已有的主旋律与和弦轨道内容，只能新增轨道；
+- 新增鼓组、贝斯、和声铺底、装饰/副旋律等轨道并编写 MIDI 片段；
+- 鼓组用 MIDI 数字：底鼓 36、军鼓 38、踩镲 42、开镲 46、嗵鼓 50/48、镲 49；
+- 贝斯走根音与节奏支撑，和声铺底用长音 pad；各 region 的 start 要对齐段落；
+- 根据段落属性安排密度：intro 稀疏、verse 适中、chorus 饱满、bridge 做对比。""",
+    Stage.MIX: """阶段：混音（mix）—— 必须覆盖前两阶段产生的所有轨道。
 为所有已有轨道设置音量、声相、均衡、压缩、发送等。
-要求：主旋律/人声靠中、-3dB 左右；贝斯居中 -6dB；鼓组分轨设声相；
-给鼓组加 Channel EQ + Compressor，给人声加 DeEsser + Reverb 发送；
-建立一条 Reverb Bus 辅助通道并让需要空间的轨道发送；输出 mix 数组覆盖全部轨道。""",
-    Stage.MASTER: """阶段：母带（master）
+要求：
+- 主旋律/人声靠中、-3dB 左右；贝斯居中 -6dB；鼓组分轨设声相；
+- 给鼓组加 Channel EQ + Compressor，给人声加 DeEsser + Reverb 发送；
+- 建立一条 Reverb Bus 辅助通道并让需要空间的轨道发送；
+- 输出 mix 数组覆盖全部已有轨道（主旋律、和弦、鼓组、贝斯、铺底等），不得遗漏。""",
+    Stage.MASTER: """阶段：母带（master）—— 整首作品的最后一步，输出最终成品。
 在主输出施加母带链并设置导出参数。
-要求：顺序 Channel EQ（修整低频）-> Compressor（胶合）-> Limiter（响度）；
-Limiter 目标 -1 dBTP，响度约 -14 LUFS；给出 bounce 导出参数。""",
+要求：
+- 顺序 Channel EQ（修整低频）-> Compressor（胶合）-> Limiter（响度）；
+- Limiter 目标 -1 dBTP，响度约 -14 LUFS；
+- 给出 bounce 导出参数（wav/24bit/44100Hz）；
+- rationale 里总结整首作品的制作思路与最终听感目标。""",
 }
 
 
@@ -178,6 +195,37 @@ class WebAIDriver:
     @property
     def connected(self) -> bool:
         return self._context is not None
+
+    async def health_check(self) -> bool:
+        """检查浏览器/页面是否仍可响应。用于长任务中检测断连。"""
+        if not self._context or not self._page:
+            return False
+        try:
+            await self._page.evaluate("1+1")
+            return True
+        except Exception as e:
+            log.warning("网页 AI 健康检查失败：%s", e)
+            return False
+
+    async def reconnect(self, log_cb=None) -> bool:
+        """关闭旧连接并重新建立。返回是否成功。"""
+        if log_cb:
+            await log_cb("warn", "网页 AI 连接异常，正在重连...")
+        try:
+            await self.close()
+        except Exception:
+            pass
+        try:
+            await self._connect()
+            await self.ensure_page()
+            if log_cb:
+                await log_cb("info", "网页 AI 已重连。")
+            return True
+        except Exception as e:
+            log.error("重连失败：%s", e)
+            if log_cb:
+                await log_cb("error", f"重连失败：{e}")
+            return False
 
     # ---------- 连接 ----------
     async def _connect(self):
@@ -422,21 +470,59 @@ class AIEngine:
     def online(self) -> bool:
         return self._use_web
 
-    async def generate_stage(
+    async def health_check(self) -> bool:
+        """转发到 driver 的健康检查（demo 模式恒为 True）。"""
+        if not self._use_web:
+            return True
+        return await self.driver.health_check()
+
+    async def reconnect(self, log_cb=None) -> bool:
+        if not self._use_web:
+            return True
+        return await self.driver.reconnect(log_cb=log_cb)
+
+    async def evaluate_stage(
         self,
         stage: Stage,
-        user_prompt: str,
+        result: "StageResult",
         context: Optional[str] = None,
         log_cb=None,
-    ) -> StageResult:
-        if self._use_web:
-            try:
-                return await self._generate_via_web(stage, user_prompt, context, log_cb)
-            except Exception as e:
-                log.warning("网页 AI 调用失败 (%s)，降级到内置生成器。", e)
+    ) -> tuple[bool, str]:
+        """让 AI 自评估本阶段产出是否达标。返回 (是否可接受, 反馈意见)。
+
+        demo 模式下直接通过（无网页 AI 可问）。
+        """
+        if not self._use_web:
+            return True, ""
+        prompt = (
+            "你是音乐制作质检员。请评估下面这一阶段的产出是否符合专业标准。\n"
+            f"阶段：{stage.value}\n"
+            f"产出摘要：{result.summary}\n"
+            f"创作思路：{result.rationale or '(无)'}\n"
+            f"轨道数：{len(result.tracks)}，MIDI 片段数：{len(result.regions)}，"
+            f"混音条目数：{len(result.mix)}，母带插件数：{len(result.master_plugins)}\n"
+            + (f"已有上下文：\n{context}\n" if context else "")
+            + "\n请只输出 JSON：{\"acceptable\": true/false, \"issues\": [\"问题1\", ...], \"feedback\": \"改进建议（中文，无则空字符串）\"}"
+        )
+        try:
+            raw = await self.driver.chat(prompt, log_cb=log_cb, new_chat=False)
+            data = self._extract_json(raw)
+            if data and "acceptable" in data:
+                acceptable = bool(data["acceptable"])
+                issues = data.get("issues", [])
+                feedback = data.get("feedback", "")
+                if issues:
+                    feedback = ("问题：" + "；".join(issues) + "。") + feedback
                 if log_cb:
-                    await log_cb("warn", f"网页 AI 调用失败：{e}，本阶段降级为 demo。")
-        return self._generate_demo(stage, user_prompt, context)
+                    tag = "通过" if acceptable else "需改进"
+                    await log_cb("info", f"自评估[{stage.value}]：{tag}" + (f" — {feedback}" if feedback else ""))
+                return acceptable, feedback
+            return True, ""
+        except Exception as e:
+            log.warning("自评估失败（%s），按通过处理。", e)
+            if log_cb:
+                await log_cb("warn", f"自评估调用失败：{e}，按通过处理。")
+            return True, ""
 
     async def generate_full(self, user_prompt: str, context: Optional[str] = None,
                             log_cb=None) -> "AsyncIterator[StageResult]":

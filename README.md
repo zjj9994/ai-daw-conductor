@@ -43,7 +43,8 @@ AI 在四个阶段独立完成决策与执行：
 ai-daw-conductor/
 ├── backend/
 │   ├── server.py            # FastAPI + WebSocket，前端入口与事件流
-│   ├── ai_engine.py         # WebAIDriver(Playwright) 驱动网页 AI + 内置 demo 生成器
+│   ├── ai_engine.py         # WebAIDriver(Playwright) 驱动网页 AI + 内置 demo 生成器 + 自评估
+│   ├── autonomous.py        # 自主流水线：不间断完成整首作品（自评估+重连+上下文累积）
 │   ├── commander.py         # 把 AI 决策编排为有序执行（流水线）
 │   ├── daw_controller.py    # 高层动作：建项目/轨道/MIDI/混音/母带/导出
 │   ├── midi_engine.py       # 生成标准 MIDI 文件 + 虚拟端口实时输出（mido/rtmidi）
@@ -133,6 +134,7 @@ osascript scripts/logic_setup.scpt
 | POST | `/api/browser/connect` | 连接/复用已登录的网页 AI 标签页 |
 | POST | `/api/stage` | 执行单阶段（compose/arrange/mix/master） |
 | POST | `/api/pipeline` | 执行完整四阶段流水线 |
+| POST | `/api/autonomous` | 自主制作：AI 不间断完成整首作品（含自评估+自动重连） |
 | GET  | `/api/task/status` | 当前任务状态与进度（供轮询） |
 | POST | `/api/cancel` | 取消当前任务 |
 | GET  | `/api/renders` | 渲染历史（导出文件列表，重启后仍保留） |
@@ -181,6 +183,64 @@ osascript scripts/logic_setup.scpt
 ### 创作指令模板
 
 指令输入框下方有「模板」栏：点「存为模板」把当前指令存入浏览器本地存储，之后点模板名即可一键填入，点「×」删除。模板只在当前浏览器保留，不上传服务端。
+
+## 🤖 自主制作模式
+
+点指令栏的「自主制作」按钮，AI 会**不间断、自主地**完成一整首音乐/歌曲，全程无需用户介入。这是本项目的核心能力，与普通「全流程」模式的区别：
+
+| 能力 | 全流程 `/api/pipeline` | 自主制作 `/api/autonomous` |
+|------|------------------------|----------------------------|
+| 阶段衔接 | 线性跑完四阶段 | 自动衔接，上下文累积传递 |
+| 整首连贯性 | 各阶段独立决策 | compose 确定的标题/调性/速度/段落结构/轨道命名被后续阶段严格延续 |
+| 质量保障 | 无 | 每阶段产出后 AI 自评估，不达标带反馈重做（默认最多 2 次） |
+| 断线恢复 | 无 | 每阶段前做网页 AI 健康检查，断连自动重连 |
+| 失败处理 | 单阶段失败即终止 | 单阶段彻底失败降级为 demo，流水线继续推进直至完成 |
+| 取消 | 支持 | 支持（信号立即传播，下一检查点中断） |
+
+### 工作流程
+
+```
+用户输入「一首 100BPM A 小调抒情流行…」并点「自主制作」
+  │
+  ├─ [1/4] 作曲 compose
+  │     AI 确定标题/调性/速度/段落结构，生成主旋律与和声
+  │     → 自评估 → 通过则进入下一阶段，不达标带反馈重做
+  │     → 健康检查网页 AI 是否仍在线
+  │
+  ├─ [2/4] 编曲 arrange
+  │     延续作曲的结构，新增鼓组/贝斯/铺底/副旋律
+  │     → 自评估 → 重做（若需要）
+  │
+  ├─ [3/4] 混音 mix
+  │     覆盖全部已有轨道的音量/声相/插件/发送
+  │     → 自评估 → 重做（若需要）
+  │
+  └─ [4/4] 母带 master
+        主输出 EQ→压缩→限制器，导出 wav 成品
+        → 自评估 → 重做（若需要）
+  │
+  └─ 完成：整首作品导出，渲染历史记录，前端展示
+```
+
+### 自评估开关
+
+指令栏右侧的「自评估」复选框控制是否启用 AI 自评。关闭后等同线性推进（速度更快但无质量兜底）。开启时每阶段会多一次 AI 对话用于质检，长任务更耗时但产出更可靠。
+
+### API 调用
+
+```bash
+curl -X POST http://127.0.0.1:8787/api/autonomous \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"一首 100BPM 的 A 小调抒情流行，钢琴主导，副歌加入弦乐与鼓组","enable_self_eval":true,"max_stage_retries":2}'
+```
+
+随时可 `POST /api/cancel` 中断。进度通过 `GET /api/task/status`（mode 字段为 `autonomous`）或 WebSocket 实时查看。
+
+### 注意事项
+
+- 自主模式对话次数较多（每阶段 1 次生成 + 1 次评估 + 可能的重做），网页 AI 若有频率限制需留意；
+- 网页 AI 标签页需保持登录且不被手动关闭，断连后系统会自动重连；
+- 非 macOS 环境下 Logic Pro 操作为模拟模式，但 MIDI 生成、自评估、流水线编排均正常工作。
 
 ## 🛠️ 故障排查
 

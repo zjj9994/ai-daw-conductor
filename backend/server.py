@@ -31,6 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .ai_engine import AIEngine
+from .autonomous import AutonomousPipeline
 from .commander import Commander
 from .config_loader import load_config, validate_config
 from .daw_controller import DAWController
@@ -48,6 +49,7 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 _state: dict = {"ai": None, "daw": None, "commander": None, "cfg": {}}
 _ws_clients: set[WebSocket] = set()
 _current_task: Optional[asyncio.Task] = None
+_autonomous: Optional[AutonomousPipeline] = None
 tracker = TaskTracker(history_file=DEFAULT_HISTORY_FILE)
 
 
@@ -235,9 +237,56 @@ async def api_pipeline(p: PipelineIn):
     return {"ok": True}
 
 
+class AutonomousIn(BaseModel):
+    prompt: str = ""
+    enable_self_eval: bool = True
+    max_stage_retries: int = 2
+
+
+@app.post("/api/autonomous")
+async def api_autonomous(a: AutonomousIn):
+    """启动自主制作：AI 不间断、自主完成一整首作品。
+
+    与 /api/pipeline 的区别：
+    - 阶段间累积上下文，保证整首作品连贯（标题/调性/速度/结构/轨道）
+    - 每阶段产出后 AI 自评估，不达标带反馈重做
+    - 网页 AI 断连自动健康检查 + 重连
+    - 单阶段彻底失败降级为 demo，但流水线不中断
+    """
+    global _current_task, _autonomous
+    if _current_task and not _current_task.done():
+        return JSONResponse({"ok": False, "error": "已有任务在运行，请先取消"}, status_code=409)
+    commander: Commander = _state["commander"]
+    ai: AIEngine = _state["ai"]
+    _autonomous = AutonomousPipeline(
+        ai=ai, commander=commander, tracker=tracker,
+        max_stage_retries=max(0, a.max_stage_retries),
+        enable_self_eval=a.enable_self_eval,
+    )
+
+    async def _run():
+        try:
+            await _autonomous.run(a.prompt)
+        except asyncio.CancelledError:
+            tracker.cancel()
+        except Exception as e:
+            log.exception("autonomous 执行失败")
+            tracker.fail(str(e))
+            await broadcast({"type": "daw_event", "kind": "error", "message": str(e)})
+        finally:
+            await broadcast({"type": "daw_event", "kind": "task_finished"})
+
+    _current_task = asyncio.create_task(_run())
+    return {"ok": True, "mode": "autonomous", "self_eval": a.enable_self_eval,
+            "max_stage_retries": a.max_stage_retries}
+
+
 @app.post("/api/cancel")
 async def api_cancel():
-    global _current_task
+    global _current_task, _autonomous
+    # 优先通知自主流水线（它会级联取消 commander）
+    if _autonomous:
+        _autonomous.cancel()
     if _state.get("commander"):
         _state["commander"].cancel()
     if _current_task and not _current_task.done():
