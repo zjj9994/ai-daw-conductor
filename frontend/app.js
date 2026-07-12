@@ -553,13 +553,53 @@ function collectSettingsForm() {
     user_data_dir: $("#set-userdata").value.trim(),
   };
 }
+
+// 各 provider 的默认网址（与后端 DEFAULT_URLS 保持一致）
+const PROVIDER_DEFAULT_URLS = {
+  doubao: "https://www.doubao.com/chat/",
+  kimi: "https://kimi.moonshot.cn/",
+  qwen: "https://tongyi.aliyun.com/qianwen/",
+  zhipu: "https://chatglm.cn/main/detail/",
+  custom: "",
+};
+
 function fillSettingsForm(s) {
   $("#set-provider").value = s.provider || "doubao";
-  $("#set-weburl").value = s.web_url || "";
+  // 网址：若服务端返回空，按当前 provider 填默认值，便于用户看到/编辑
+  const url = s.web_url || "";
+  $("#set-weburl").value = url || PROVIDER_DEFAULT_URLS[s.provider || "doubao"] || "";
   $("#set-timeout").value = s.timeout || 180;
   $("#set-bmode").value = s.browser_mode || "cdp";
   $("#set-cdpurl").value = s.cdp_url || "http://127.0.0.1:9222";
   $("#set-userdata").value = s.user_data_dir || "";
+  updateProviderHint();
+}
+
+// 切换 provider 时联动网址：若当前网址是某 provider 的默认值或为空，则更新为新 provider 的默认值
+function onProviderChange() {
+  const provider = $("#set-provider").value;
+  const curUrl = $("#set-weburl").value.trim();
+  // 若当前网址等于任意一个已知 provider 的默认值，或为空，则视为「未自定义」可安全替换
+  const isDefault = !curUrl || Object.values(PROVIDER_DEFAULT_URLS).includes(curUrl);
+  if (isDefault) {
+    $("#set-weburl").value = PROVIDER_DEFAULT_URLS[provider] || "";
+  }
+  updateProviderHint();
+}
+
+// 根据 provider 显示对应登录提示
+function updateProviderHint() {
+  const provider = $("#set-provider").value;
+  const hint = $("#provider-hint");
+  if (!hint) return;
+  const tips = {
+    doubao: "打开 doubao.com 登录豆包，或在 Chrome 里登录后用 CDP 连接",
+    kimi: "打开 kimi.moonshot.cn 登录 Kimi，或在 Chrome 里登录后用 CDP 连接",
+    qwen: "打开 tongyi.aliyun.com 登录通义千问，或在 Chrome 里登录后用 CDP 连接",
+    zhipu: "打开 chatglm.cn 登录智谱清言，或在 Chrome 里登录后用 CDP 连接",
+    custom: "在下方网址栏填入你要用的网页 AI 聊天页地址（需含 https://），在 Chrome 里登录该页面后用 CDP 连接",
+  };
+  hint.textContent = tips[provider] || "";
 }
 
 $("#btn-settings").addEventListener("click", async () => {
@@ -573,6 +613,7 @@ $("#btn-settings").addEventListener("click", async () => {
     $("#set-status").textContent = "当前：" + tag;
   } catch (e) {}
 });
+$("#set-provider").addEventListener("change", onProviderChange);
 $("#btn-close-settings").addEventListener("click", () => modal.classList.remove("open"));
 modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.remove("open"); });
 
@@ -593,8 +634,17 @@ $("#btn-save-settings").addEventListener("click", async () => {
       body: JSON.stringify(body),
     });
     const j = await res.json();
-    $("#set-status").textContent = j.ai_online ? "已保存 · 网页 AI 就绪" : "已保存 · demo 模式（未安装 Playwright）";
-    setChip("#chip-ai", j.ai_online, j.ai_online ? "网页 AI 就绪" : "demo 模式");
+    if (!res.ok) {
+      $("#set-status").textContent = "✗ " + (j.error || "保存失败");
+      return;
+    }
+    const providerName = { doubao: "豆包", kimi: "Kimi", qwen: "通义千问", zhipu: "智谱清言", custom: "自定义" }[j.provider] || j.provider;
+    if (j.ai_online) {
+      $("#set-status").textContent = `已保存 · ${providerName} 网页 AI 就绪`;
+    } else {
+      $("#set-status").textContent = "已保存 · demo 模式（未安装 Playwright 或未填网址）";
+    }
+    setChip("#chip-ai", j.ai_online, j.ai_online ? `${providerName} 就绪` : "demo 模式");
   } catch (e) {
     $("#set-status").textContent = "保存失败：" + e;
   }

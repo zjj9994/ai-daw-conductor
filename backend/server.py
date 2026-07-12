@@ -168,13 +168,28 @@ async def update_settings(s: SettingsIn):
     for k in ("browser_mode", "cdp_url", "user_data_dir", "headless"):
         if k in data:
             browser[k.replace("browser_", "") if k == "browser_mode" else k] = data[k]
+    # 校验：custom 模式必须提供 web_url
+    provider = ai.get("provider", "doubao")
+    web_url = ai.get("web_url", "")
+    if provider == "custom" and not web_url:
+        return JSONResponse(
+            {"ok": False, "error": "自定义模式必须填写网页 AI 聊天页地址"},
+            status_code=400,
+        )
     # 重建引擎以应用新配置（先关闭旧的浏览器/DAW 连接）
     if _state.get("ai"):
         await _state["ai"].close()
     if _state.get("daw"):
         _state["daw"].close()
     _build_engines(cfg)
-    return {"ok": True, "ai_online": _state["ai"].online}
+    engine = _state["ai"]
+    return {
+        "ok": True,
+        "ai_online": engine.online,
+        "provider": provider,
+        "web_url": engine.driver.url if engine.driver else "",
+        "browser_connected": bool(engine and engine.driver.connected),
+    }
 
 
 class StageIn(BaseModel):

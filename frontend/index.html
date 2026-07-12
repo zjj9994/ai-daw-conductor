@@ -154,7 +154,7 @@
         <h2>网页 AI 设置</h2>
         <button class="ghost-btn" id="btn-close-settings">关闭</button>
       </div>
-      <p class="modal-hint">本项目<b>不使用 API</b>，而是复用你已登录的网页端 AI（豆包 / Kimi / 通义千问 / 智谱清言）。先用下方「启动调试 Chrome」脚本登录网页 AI，再点「测试连接」。Playwright 未安装时自动降级为内置 demo 生成器。</p>
+      <p class="modal-hint">本项目<b>不使用 API</b>，而是复用你已登录的网页端 AI。选择你要用的 AI 服务（或选「自定义」填任意网址），在 Chrome 里打开对应网址登录后，点「测试连接」即可。Playwright 未安装时自动降级为内置 demo 生成器。</p>
       <div class="form">
         <label>网页 AI 服务
           <select id="set-provider">
@@ -162,10 +162,11 @@
             <option value="kimi">Kimi（kimi.moonshot.cn）</option>
             <option value="qwen">通义千问（tongyi.aliyun.com）</option>
             <option value="zhipu">智谱清言（chatglm.cn）</option>
-            <option value="custom">自定义</option>
+            <option value="custom">自定义（填任意网页 AI 网址）</option>
           </select>
         </label>
-        <label>网页 AI 聊天页地址（留空用默认）
+        <div id="provider-hint" class="field-hint"></div>
+        <label>网页 AI 聊天页地址（切换上方服务会自动填充，可手动修改）
           <input id="set-weburl" type="text" placeholder="https://www.doubao.com/chat/" />
         </label>
         <label>等待回复超时（秒）
