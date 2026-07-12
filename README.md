@@ -50,18 +50,23 @@ ai-daw-conductor/
 │   ├── applescript_bridge.py# osascript 控制 Logic Pro（轨道/混音器/插件/Bounce）
 │   ├── music_theory.py      # 音名互转、音阶、和弦、量化等乐理工具
 │   ├── models.py            # pydantic 数据模型（StageResult / TrackSpec / MixParams ...）
-│   └── config_loader.py     # 合并 config.yaml 与环境变量
+│   ├── task_tracker.py      # 任务状态/进度/渲染历史追踪（供轮询）
+│   ├── diagnostics.py       # 各子系统可用性诊断 + 建议
+│   ├── config_loader.py     # 合并 config.yaml 与环境变量 + 配置校验
+│   └── logging_config.py    # 文件日志（按天轮转）
 ├── frontend/
 │   ├── index.html           # 控制台风格单页界面
 │   ├── styles.css           # 示波器美学（深色 + 荧光青绿/品红）
-│   └── app.js               # WebSocket 事件处理 + 示波器动画
+│   └── app.js               # WebSocket 事件处理 + 进度/诊断/重试 + 示波器动画
 ├── scripts/
 │   ├── install.sh           # 一键安装
 │   ├── run.sh               # 启动服务
 │   ├── launch_chrome.sh     # 启动带调试端口的 Chrome（用于网页 AI 登录）
 │   └── logic_setup.scpt     # Logic Pro 环境准备（macOS）
+├── tests/                   # 单元测试（乐理 / JSON 提取 / MIDI 引擎）
 ├── config/
 │   └── config.example.yaml  # 配置模板
+├── Dockerfile               # 非 macOS 开发/测试镜像
 ├── requirements.txt
 └── README.md
 ```
@@ -122,11 +127,14 @@ osascript scripts/logic_setup.scpt
 |------|------|------|
 | GET  | `/` | 前端页面 |
 | GET  | `/api/health` | 健康检查 / 网页 AI 是否就绪 / 浏览器是否已连接 |
+| GET  | `/api/diagnostics` | 各子系统诊断（Playwright/CDP/MIDI/AppleScript）+ 建议 |
 | GET/POST | `/api/settings` | 读取/更新网页 AI 与浏览器配置 |
 | POST | `/api/browser/connect` | 连接/复用已登录的网页 AI 标签页 |
 | POST | `/api/stage` | 执行单阶段（compose/arrange/mix/master） |
 | POST | `/api/pipeline` | 执行完整四阶段流水线 |
+| GET  | `/api/task/status` | 当前任务状态与进度（供轮询） |
 | POST | `/api/cancel` | 取消当前任务 |
+| GET  | `/api/renders` | 渲染历史（导出文件列表） |
 | WS   | `/ws` | 实时事件流（日志/进度/轨道/混音/导出） |
 
 ## ⚙️ 配置项
@@ -146,6 +154,71 @@ osascript scripts/logic_setup.scpt
 ### 网页 AI 选择器说明
 
 各网页 AI 的 DOM 不一且会改版。驱动器做了多策略兜底：输入框优先找 `textarea`/`[contenteditable]`，发送优先配置的发送按钮、否则按回车；助手回复优先用配置的 `response` 选择器、否则用 JS 抓取最后一条消息容器；「停止生成」状态用 `generating` 选择器或文本稳定性判断。若某家网页 AI 改版导致抓取异常，在 `config.yaml` 的 `ai.selectors` 里填入对应选择器即可。
+
+## 🩺 系统诊断
+
+前端右上角「诊断」按钮（或 `GET /api/diagnostics`）会逐项检查：
+
+| 检查项 | 含义 | 不通过时的处理 |
+|--------|------|---------------|
+| Playwright | 浏览器自动化库是否安装 | `pip install playwright` |
+| CDP 端口 | 调试 Chrome 是否可达 | 运行 `./scripts/launch_chrome.sh` 并登录网页 AI |
+| MIDO | MIDI 文件生成库 | `pip install mido` |
+| python-rtmidi | 实时 MIDI 虚拟端口（可选） | `pip install python-rtmidi`（不影响文件模式） |
+| AppleScript | Logic Pro 实控（仅 macOS） | 非 macOS 自动降级为模拟模式 |
+
+诊断结果会附上针对性建议。出错后修复对应项，刷新页面再点「诊断」复查即可。前端会自动轮询 `/api/task/status`（每 1.5s）更新进度条与阶段状态；某阶段失败时会高亮为红色并显示「重试阶段」按钮，点击即可用同一指令重跑该阶段。
+
+## 🛠️ 故障排查
+
+**「demo 模式」一直不消失 / 测试连接失败**
+- 确认已 `pip install playwright` 且 `playwright install chromium`；
+- 确认用 `./scripts/launch_chrome.sh`（而非普通 Chrome）启动了带调试端口的 Chrome，并在里面登录了网页 AI；
+- 点「诊断」看 CDP 端口是否可达；容器内连宿主机 Chrome 时把 `cdp_url` 设为 `http://host.docker.internal:9222`，并让 Chrome 监听 `0.0.0.0`。
+
+**网页 AI 回复抓不到 / 一直等待超时**
+- 多数是网页 AI 改版导致选择器失效。打开开发者工具找到输入框/发送按钮/回复容器的真实选择器，填入 `config.yaml` 的 `ai.selectors`；
+- 驱动器会在超时前保存截图到 `~/.ai-daw-conductor/screenshots/`，便于排查；
+- 适当调大 `ai.timeout`（默认 180s，长回复可能需要更长）；
+- 确认网页 AI 没有弹出验证码/登录失效弹窗。
+
+**AI 回复了但解析 JSON 失败**
+- 驱动器会自动剥离 `<think>` 标签、代码围栏、尾随逗号；若仍失败，换一家网页 AI（Kimi/Qwen 通常更稳定输出 JSON）或在指令里强调「只输出 JSON，不要任何解释」。
+
+**MIDI 生成了但 Logic Pro 没导入 / 混音器没反应**
+- 仅 macOS + Logic Pro 支持自动导入与混音器操作，其他平台为模拟模式（只生成 MIDI 文件）；
+- macOS 下确认已授予终端「辅助功能」权限（系统设置 → 隐私与安全性 → 辅助功能）；
+- 运行 `osascript scripts/logic_setup.scpt` 检查 Logic Pro 环境。
+
+**导出（Bounce）没生成文件**
+- macOS 下 Bounce 由 AppleScript 触发，需 Logic Pro 处于打开状态且有活动项目；
+- 非 macOS 平台会生成 0 字节占位文件，属正常现象；
+- 检查 `daw.render_dir` 是否有写入权限。
+
+**WebSocket 日志不刷新**
+- 前端会自动每 2s 重连；若仍不行，检查 `SERVER_PORT` 是否被占用、防火墙是否放行；
+- 浏览器控制台看 `ws` 连接错误。
+
+## 🐳 Docker（非 macOS 体验 / 测试）
+
+容器内可运行 FastAPI 服务、Playwright 网页 AI 驱动与 MIDI 生成；Logic Pro 实控与实时 MIDI 输出会自动降级为模拟模式。推荐用 CDP 连接宿主机上已登录网页 AI 的 Chrome。
+
+```bash
+# 1. 宿主机启动带调试端口的 Chrome 并登录网页 AI（监听 0.0.0.0 以便容器访问）
+google-chrome --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0
+
+# 2. 构建镜像
+docker build -t ai-daw-conductor .
+
+# 3. 运行（CDP 指向宿主机）
+docker run -p 8787:8787 \
+  -e BROWSER_CDP_URL=http://host.docker.internal:9222 \
+  ai-daw-conductor
+
+# 打开 http://127.0.0.1:8787
+```
+
+也可挂载自定义配置：`-v $(pwd)/config/config.yaml:/app/config/config.yaml:ro`。
 
 ## 🎛️ 平台说明
 

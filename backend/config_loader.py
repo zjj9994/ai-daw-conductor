@@ -66,3 +66,41 @@ def load_config() -> dict[str, Any]:
 
 def is_macos() -> bool:
     return os.uname().sysname == "Darwin"
+
+
+VALID_PROVIDERS = {"doubao", "kimi", "qwen", "zhipu", "custom"}
+VALID_BROWSER_MODES = {"cdp", "persistent"}
+
+
+class ConfigError(Exception):
+    """配置校验错误。"""
+
+
+def validate_config(cfg: dict) -> list[str]:
+    """校验配置，返回问题列表（空列表表示通过）。不抛异常，便于前端展示。"""
+    issues: list[str] = []
+    ai = cfg.get("ai", {})
+    browser = cfg.get("browser", {})
+
+    provider = ai.get("provider", "doubao")
+    if provider not in VALID_PROVIDERS:
+        issues.append(f"ai.provider '{provider}' 无效，应为 {sorted(VALID_PROVIDERS)} 之一")
+
+    mode = browser.get("mode", "cdp")
+    if mode not in VALID_BROWSER_MODES:
+        issues.append(f"browser.mode '{mode}' 无效，应为 {sorted(VALID_BROWSER_MODES)} 之一")
+
+    timeout = ai.get("timeout", 180)
+    if not isinstance(timeout, (int, float)) or timeout < 10:
+        issues.append(f"ai.timeout={timeout} 过小，建议 ≥ 30 秒")
+
+    port = cfg.get("server", {}).get("port", 8787)
+    if not isinstance(port, int) or not (1 <= port <= 65535):
+        issues.append(f"server.port={port} 不是有效端口")
+
+    if mode == "cdp":
+        cdp = browser.get("cdp_url", "")
+        if not cdp.startswith("http"):
+            issues.append(f"browser.cdp_url='{cdp}' 应为 http://host:port 形式")
+
+    return issues

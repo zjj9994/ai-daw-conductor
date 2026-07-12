@@ -1,6 +1,6 @@
 """指挥官：把 AI 输出的 StageResult 翻译为 DAWController 的有序执行。
 
-负责：阶段编排、轨道/MIDI/混音/母带的依赖排序、事件汇总。
+负责：阶段编排、轨道/MIDI/混音/母带的依赖排序、事件汇总、任务追踪。
 """
 from __future__ import annotations
 
@@ -11,14 +11,16 @@ from typing import Optional
 from .ai_engine import AIEngine
 from .daw_controller import DAWController
 from .models import Stage, StageResult
+from .task_tracker import TaskTracker
 
 log = logging.getLogger("commander")
 
 
 class Commander:
-    def __init__(self, ai: AIEngine, daw: DAWController):
+    def __init__(self, ai: AIEngine, daw: DAWController, tracker: Optional[TaskTracker] = None):
         self.ai = ai
         self.daw = daw
+        self.tracker = tracker
         self._cancel = False
 
     def cancel(self):
@@ -26,6 +28,8 @@ class Commander:
 
     async def execute_stage(self, result: StageResult, bpm: float):
         """执行单个 StageResult。"""
+        if self.tracker:
+            self.tracker.set_stage(result.stage.value)
         await self.daw.log("info", f"===== 执行阶段：{result.stage.value} =====")
         await self.daw.emit(kind="stage_start", stage=result.stage.value, summary=result.summary)
 
@@ -56,6 +60,8 @@ class Commander:
         if result.bounce:
             await self.daw.bounce(result.bounce)
 
+        if self.tracker:
+            self.tracker.complete_stage(result.stage.value)
         await self.daw.emit(kind="stage_done", stage=result.stage.value, rationale=result.rationale or "")
 
     async def run_stage(

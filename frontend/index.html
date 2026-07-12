@@ -27,6 +27,7 @@
     <div class="status">
       <span class="chip" id="chip-ai"><i class="dot"></i>AI 离线</span>
       <span class="chip" id="chip-daw"><i class="dot"></i>DAW 模拟</span>
+      <button class="ghost-btn" id="btn-diag">诊断</button>
       <button class="ghost-btn" id="btn-settings">设置</button>
     </div>
   </header>
@@ -46,6 +47,7 @@
             <button class="stage-btn" data-stage="master">母带</button>
           </div>
           <div class="run-actions">
+            <button id="btn-retry" class="ghost-btn" style="display:none">重试阶段</button>
             <button id="btn-cancel" class="ghost-btn warn" disabled>取消</button>
             <button id="btn-run" class="primary-btn">开始制作</button>
           </div>
@@ -54,7 +56,8 @@
 
       <!-- 阶段流水线 -->
       <div class="panel">
-        <label class="panel-label">制作流水线</label>
+        <label class="panel-label">制作流水线 <span class="muted" id="progress-label"></span></label>
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
         <ol class="pipeline" id="pipeline">
           <li class="stage-node" data-stage="compose">
             <span class="node-idx">01</span>
@@ -122,6 +125,13 @@
           <div class="empty">AI 回复将在此显示</div>
         </div>
       </div>
+
+      <div class="panel history-panel">
+        <label class="panel-label">渲染历史 <span class="muted" id="render-count">0</span></label>
+        <div id="render-history" class="render-history">
+          <div class="empty">尚未导出任何作品</div>
+        </div>
+      </div>
     </aside>
   </main>
 
@@ -173,6 +183,18 @@
   <footer class="footer">
     <span>AI-DAW-Conductor · 复用你已登录的网页 AI（豆包/Kimi/千问）驱动 Logic Pro · 无需 API Key</span>
   </footer>
+
+  <!-- 诊断弹层 -->
+  <div class="modal" id="modal-diagnostics" aria-hidden="true">
+    <div class="modal-card diag-card">
+      <div class="modal-head">
+        <h2>系统诊断</h2>
+        <button class="ghost-btn" id="btn-close-diag">关闭</button>
+      </div>
+      <p class="modal-hint">检查各子系统是否就绪。出错时请按建议修复后重试。</p>
+      <div id="diag-body" class="diag-body"><div class="empty">点击「诊断」按钮开始检查</div></div>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

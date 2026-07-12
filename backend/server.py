@@ -3,11 +3,15 @@
 路由：
   GET  /                  -> 前端页面
   GET  /api/health        -> 健康检查
+  GET  /api/diagnostics   -> 各子系统诊断（playwright/chrome/midi/applescript）
   GET  /api/settings      -> 读取当前配置（网页 AI + 浏览器连接）
   POST /api/settings      -> 更新配置（provider/web_url/browser.*）
   POST /api/stage         -> 单阶段执行（compose/arrange/mix/master）
   POST /api/pipeline      -> 完整四阶段流水线
+  GET  /api/task/status   -> 当前任务状态与进度（供轮询）
   POST /api/cancel        -> 取消当前任务
+  GET  /api/renders       -> 渲染历史
+  POST /api/browser/connect -> 连接已登录的网页 AI 标签页
   WS   /ws                -> 实时事件流（日志/进度/轨道/混音/导出）
 
 运行：uvicorn backend.server:app --host 127.0.0.1 --port 8787 --reload
@@ -28,10 +32,12 @@ from pydantic import BaseModel
 
 from .ai_engine import AIEngine
 from .commander import Commander
-from .config_loader import load_config
+from .config_loader import load_config, validate_config
 from .daw_controller import DAWController
+from .diagnostics import run_diagnostics
 from .logging_config import setup_logging
 from .models import Stage
+from .task_tracker import TaskTracker
 
 setup_logging()
 log = logging.getLogger("server")
@@ -42,12 +48,13 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 _state: dict = {"ai": None, "daw": None, "commander": None, "cfg": {}}
 _ws_clients: set[WebSocket] = set()
 _current_task: Optional[asyncio.Task] = None
+tracker = TaskTracker()
 
 
 def _build_engines(cfg: dict):
     ai = AIEngine(cfg)
-    daw = DAWController(cfg, event_cb=broadcast)
-    commander = Commander(ai, daw)
+    daw = DAWController(cfg, event_cb=broadcast, tracker=tracker)
+    commander = Commander(ai, daw, tracker=tracker)
     _state.update(ai=ai, daw=daw, commander=commander, cfg=cfg)
     return commander
 
@@ -55,6 +62,9 @@ def _build_engines(cfg: dict):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = load_config()
+    issues = validate_config(cfg)
+    for iss in issues:
+        log.warning("配置问题：%s", iss)
     _build_engines(cfg)
     log.info("AI 引擎就绪（网页 AI 模式可用=%s）", _state["ai"].online)
     yield
@@ -174,13 +184,20 @@ class StageIn(BaseModel):
 async def api_stage(s: StageIn):
     """异步执行单阶段，事件经 /ws 推送。返回 task 接受标识。"""
     global _current_task
+    if _current_task and not _current_task.done():
+        return JSONResponse({"ok": False, "error": "已有任务在运行，请先取消"}, status_code=409)
     commander: Commander = _state["commander"]
+    tracker.start(mode="stage", prompt=s.prompt, total=1)
 
     async def _run():
         try:
             await commander.run_stage(s.stage, s.prompt, s.context, s.bpm)
+            tracker.finish()
+        except asyncio.CancelledError:
+            tracker.cancel()
         except Exception as e:
             log.exception("stage 执行失败")
+            tracker.fail(str(e))
             await broadcast({"type": "daw_event", "kind": "error", "message": str(e)})
         finally:
             await broadcast({"type": "daw_event", "kind": "task_finished"})
@@ -196,13 +213,20 @@ class PipelineIn(BaseModel):
 @app.post("/api/pipeline")
 async def api_pipeline(p: PipelineIn):
     global _current_task
+    if _current_task and not _current_task.done():
+        return JSONResponse({"ok": False, "error": "已有任务在运行，请先取消"}, status_code=409)
     commander: Commander = _state["commander"]
+    tracker.start(mode="pipeline", prompt=p.prompt, total=4)
 
     async def _run():
         try:
             await commander.run_pipeline(p.prompt)
+            tracker.finish()
+        except asyncio.CancelledError:
+            tracker.cancel()
         except Exception as e:
             log.exception("pipeline 执行失败")
+            tracker.fail(str(e))
             await broadcast({"type": "daw_event", "kind": "error", "message": str(e)})
         finally:
             await broadcast({"type": "daw_event", "kind": "task_finished"})
@@ -218,7 +242,28 @@ async def api_cancel():
         _state["commander"].cancel()
     if _current_task and not _current_task.done():
         _current_task.cancel()
+    tracker.cancel()
     return {"ok": True}
+
+
+@app.get("/api/diagnostics")
+async def api_diagnostics():
+    """运行各子系统诊断检查。"""
+    cfg = _state.get("cfg", {})
+    engine = _state.get("ai")
+    return await run_diagnostics(cfg, engine)
+
+
+@app.get("/api/task/status")
+async def api_task_status():
+    """当前任务状态与进度（供轮询）。"""
+    return tracker.status.to_dict()
+
+
+@app.get("/api/renders")
+async def api_renders():
+    """渲染历史。"""
+    return {"renders": tracker.renders_dict(), "count": len(tracker.renders)}
 
 
 @app.post("/api/browser/connect")

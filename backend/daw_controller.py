@@ -23,9 +23,10 @@ EventCB = Callable[[dict], Awaitable[None]]
 
 
 class DAWController:
-    def __init__(self, cfg: dict, event_cb: Optional[EventCB] = None):
+    def __init__(self, cfg: dict, event_cb: Optional[EventCB] = None, tracker=None):
         self.cfg = cfg.get("daw", {})
         self.event_cb = event_cb
+        self.tracker = tracker
         self.midi = MidiEngine(
             midi_port=self.cfg.get("midi_port"),
             humanize=bool(self.cfg.get("humanize", False)),
@@ -132,7 +133,15 @@ class DAWController:
             out = self.applescript.render_dir / f"{bounce.filename or 'master'}.{bounce.format}"
             out.write_bytes(b"")  # 模拟占位
             await self.log("warn", f"模拟模式：已生成占位导出文件 {out}")
-        await self.emit(kind="bounce_done", path=str(out))
+        # 记录到渲染历史
+        size = out.stat().st_size if out.exists() else 0
+        if self.tracker:
+            self.tracker.add_render(
+                path=str(out),
+                filename=bounce.filename or "master",
+                stage="master", size=size,
+            )
+        await self.emit(kind="bounce_done", path=str(out), filename=bounce.filename or "master")
         return out
 
     def close(self):

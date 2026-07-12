@@ -214,6 +214,10 @@ body {
 .stage-node.done .node-idx { color: var(--accent); }
 .stage-node.done::after { content: "✓"; position: absolute; }
 
+.stage-node.error { border-color: var(--warn); background: rgba(255,84,112,0.06); }
+.stage-node.error .node-state { color: var(--warn); }
+.stage-node.error .node-idx { color: var(--warn); }
+
 /* ---------- 日志 ---------- */
 .log-panel { flex: 1; min-height: 220px; display: flex; flex-direction: column; }
 .log {
@@ -232,6 +236,17 @@ body {
 .log .row.kind-event .msg { color: var(--ink); }
 .log::-webkit-scrollbar { width: 8px; }
 .log::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+
+/* ---------- 进度条 ---------- */
+.progress-bar {
+  height: 4px; border-radius: 2px; background: rgba(255,255,255,0.06);
+  overflow: hidden; margin-bottom: 14px;
+}
+.progress-fill {
+  height: 100%; width: 0%; border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width .5s ease; box-shadow: var(--glow);
+}
 
 /* ---------- 侧栏 ---------- */
 .project-info .meta { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 12px; }
@@ -283,6 +298,17 @@ body {
 .ai-preview::-webkit-scrollbar { width: 8px; }
 .ai-preview::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
 
+/* ---------- 渲染历史 ---------- */
+.render-history { display: flex; flex-direction: column; gap: 6px; max-height: 200px; overflow-y: auto; }
+.render-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: rgba(42,245,182,0.03); font-size: 11px; animation: fadeIn .3s;
+}
+.render-item .ricon { color: var(--accent); font-size: 14px; flex-shrink: 0; }
+.render-item .rname { flex: 1; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.render-item .rmeta { color: var(--muted); font-size: 10px; flex-shrink: 0; }
+
 /* ---------- 模态 ---------- */
 .modal { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center; background: rgba(3,5,8,0.75); backdrop-filter: blur(6px); }
 .modal.open { display: flex; animation: fadeIn .2s; }
@@ -298,6 +324,39 @@ body {
 }
 .form input:focus, .form select:focus { border-color: var(--accent); }
 .modal-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 20px; }
+
+/* ---------- 诊断面板 ---------- */
+.diag-card { width: min(580px, 94vw); }
+.diag-body { font-size: 12px; }
+.diag-meta {
+  display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+  padding: 12px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px;
+  font-size: 11px; color: var(--ink-dim);
+}
+.diag-meta b { color: var(--ink); font-weight: 600; }
+.diag-meta .ok { color: var(--accent); }
+.diag-meta .err { color: var(--warn); }
+.diag-list { display: flex; flex-direction: column; gap: 8px; }
+.diag-row {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px;
+  background: rgba(255,255,255,0.015);
+}
+.diag-row.ok { border-left: 3px solid var(--accent); }
+.diag-row.err { border-left: 3px solid var(--warn); }
+.diag-icon { font-size: 14px; font-weight: 700; flex-shrink: 0; }
+.diag-row.ok .diag-icon { color: var(--accent); }
+.diag-row.err .diag-icon { color: var(--warn); }
+.diag-content { flex: 1; }
+.diag-label { color: var(--ink); font-size: 12px; margin-bottom: 3px; }
+.diag-detail { color: var(--ink-dim); font-size: 11px; line-height: 1.5; word-break: break-word; }
+.diag-suggest {
+  margin-top: 16px; padding: 12px; background: rgba(255,181,71,0.06);
+  border: 1px solid rgba(255,181,71,0.25); border-radius: 10px; font-size: 11px; color: var(--ink-dim);
+}
+.diag-suggest b { color: var(--amber); }
+.diag-suggest ul { margin: 6px 0 0; padding-left: 18px; }
+.diag-suggest li { margin: 3px 0; line-height: 1.55; }
 
 /* ---------- 页脚 ---------- */
 .footer {

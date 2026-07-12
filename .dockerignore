@@ -1,0 +1,49 @@
+# 容器构建忽略：减小镜像上下文体积、避免泄敏
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# 配置/密钥（容器内用环境变量或挂载 config.yaml）
+config/config.yaml
+config/config.yml
+config/config.json
+.env
+.env.*
+*.key
+secrets/
+
+# 浏览器用户目录与产物（含登录态）
+.browser-profile/
+chrome-profile/
+screenshots/
+logs/
+*.log
+
+# 构建产物
+output/
+renders/
+*.mid
+*.midi
+*.wav
+*.aiff
+*.aif
+*.mp3
+*.flac
+*.logicx
+*.logicx.zip
+
+# 开发文件
+Dockerfile
+.dockerignore
+README.md
+LICENSE
+conftest.py
+pytest.ini
+requirements-dev.txt
+tests/
+scripts/
