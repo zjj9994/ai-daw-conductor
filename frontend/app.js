@@ -76,6 +76,7 @@ function handle(evt) {
       break;
     case "ai_result":
       addLog("info", `[AI·${evt.stage}] ${evt.summary}`, "event");
+      renderAIPreview(evt.stage, evt.summary, evt.rationale);
       break;
     case "pipeline_progress":
       setStageState(evt.completed, "done");
@@ -201,6 +202,21 @@ function renderBounce(path) {
   addLog("info", `导出完成：${path}`, "event");
 }
 
+function renderAIPreview(stage, summary, rationale) {
+  const stageNames = { compose: "作曲", arrange: "编曲", mix: "混音", master: "母带" };
+  const box = $("#ai-preview");
+  if (box.querySelector(".empty")) box.innerHTML = "";
+  const card = document.createElement("div");
+  card.style.marginBottom = "12px";
+  card.innerHTML = `<span class="stage-tag">${escapeHtml(stageNames[stage] || stage)}</span>
+    <div class="summary"></div>
+    <div class="rationale"></div>`;
+  card.querySelector(".summary").textContent = summary || "";
+  card.querySelector(".rationale").textContent = rationale ? "AI 思路：" + rationale : "";
+  box.appendChild(card);
+  box.scrollTop = box.scrollHeight;
+}
+
 // ---------- 工具 ----------
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -230,6 +246,7 @@ $("#btn-run").addEventListener("click", async () => {
   $("#mixer").innerHTML = '<div class="empty">无混音数据</div>';
   $("#render").innerHTML = '<div class="empty">未导出</div>';
   $("#project-info").innerHTML = '<div class="empty">尚未生成作品</div>';
+  $("#ai-preview").innerHTML = '<div class="empty">AI 回复将在此显示</div>';
   $("#track-count").textContent = "0";
   setRunning(true);
   addLog("info", `开始任务（${state.mode === "pipeline" ? "全流程" : state.stage}）`, "event");
@@ -257,17 +274,41 @@ $("#btn-cancel").addEventListener("click", async () => {
 });
 
 // ---------- 设置 ----------
+const LS_KEY = "ai-daw-conductor-settings";
 const modal = $("#modal-settings");
+
+function loadLocalSettings() {
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch (e) { return {}; }
+}
+function saveLocalSettings(obj) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(obj)); } catch (e) {}
+}
+function collectSettingsForm() {
+  return {
+    provider: $("#set-provider").value,
+    web_url: $("#set-weburl").value.trim(),
+    timeout: parseFloat($("#set-timeout").value) || 180,
+    browser_mode: $("#set-bmode").value,
+    cdp_url: $("#set-cdpurl").value.trim(),
+    user_data_dir: $("#set-userdata").value.trim(),
+  };
+}
+function fillSettingsForm(s) {
+  $("#set-provider").value = s.provider || "doubao";
+  $("#set-weburl").value = s.web_url || "";
+  $("#set-timeout").value = s.timeout || 180;
+  $("#set-bmode").value = s.browser_mode || "cdp";
+  $("#set-cdpurl").value = s.cdp_url || "http://127.0.0.1:9222";
+  $("#set-userdata").value = s.user_data_dir || "";
+}
+
 $("#btn-settings").addEventListener("click", async () => {
   modal.classList.add("open");
+  // 先用本地缓存填充表单（即时），再用服务端实际值覆盖
+  fillSettingsForm(loadLocalSettings());
   try {
     const s = await (await fetch("/api/settings")).json();
-    $("#set-provider").value = s.provider || "doubao";
-    $("#set-weburl").value = s.web_url || "";
-    $("#set-timeout").value = s.timeout || 180;
-    $("#set-bmode").value = s.browser_mode || "cdp";
-    $("#set-cdpurl").value = s.cdp_url || "http://127.0.0.1:9222";
-    $("#set-userdata").value = s.user_data_dir || "";
+    fillSettingsForm(s);
     const tag = s.ai_online ? (s.browser_connected ? "已连接网页 AI" : "网页 AI 就绪（未连接）") : "未启用（demo）";
     $("#set-status").textContent = "当前：" + tag;
   } catch (e) {}
@@ -276,14 +317,16 @@ $("#btn-close-settings").addEventListener("click", () => modal.classList.remove(
 modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.remove("open"); });
 
 $("#btn-save-settings").addEventListener("click", async () => {
+  const form = collectSettingsForm();
   const body = {
-    provider: $("#set-provider").value,
-    web_url: $("#set-weburl").value.trim() || undefined,
-    timeout: parseFloat($("#set-timeout").value) || undefined,
-    browser_mode: $("#set-bmode").value,
-    cdp_url: $("#set-cdpurl").value.trim() || undefined,
-    user_data_dir: $("#set-userdata").value.trim() || undefined,
+    provider: form.provider,
+    web_url: form.web_url || undefined,
+    timeout: form.timeout || undefined,
+    browser_mode: form.browser_mode,
+    cdp_url: form.cdp_url || undefined,
+    user_data_dir: form.user_data_dir || undefined,
   };
+  saveLocalSettings(form);  // 本地持久化，下次打开自动回填
   try {
     const res = await fetch("/api/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },

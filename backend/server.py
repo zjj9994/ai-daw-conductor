@@ -30,9 +30,10 @@ from .ai_engine import AIEngine
 from .commander import Commander
 from .config_loader import load_config
 from .daw_controller import DAWController
+from .logging_config import setup_logging
 from .models import Stage
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+setup_logging()
 log = logging.getLogger("server")
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"

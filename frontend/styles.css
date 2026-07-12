@@ -267,6 +267,23 @@ body {
 .render .render-info .path { color: var(--muted); font-size: 10px; word-break: break-all; }
 
 /* ---------- 模态 ---------- */
+/* ---------- AI 决策预览 ---------- */
+.ai-preview {
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px; font-size: 11px; line-height: 1.65; color: var(--ink-dim);
+  max-height: 240px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+}
+.ai-preview .stage-tag {
+  display: inline-block; font-family: var(--display); font-size: 9px; font-weight: 700;
+  letter-spacing: 0.1em; color: #04201a; background: var(--accent);
+  padding: 2px 8px; border-radius: 4px; margin-bottom: 8px; text-transform: uppercase;
+}
+.ai-preview .summary { color: var(--ink); margin-bottom: 8px; }
+.ai-preview .rationale { color: var(--ink-dim); font-size: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.ai-preview::-webkit-scrollbar { width: 8px; }
+.ai-preview::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+
+/* ---------- 模态 ---------- */
 .modal { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center; background: rgba(3,5,8,0.75); backdrop-filter: blur(6px); }
 .modal.open { display: flex; animation: fadeIn .2s; }
 .modal-card { width: min(520px, 92vw); background: var(--panel-solid); border: 1px solid var(--line-strong); border-radius: 16px; padding: 24px; }

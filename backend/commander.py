@@ -67,7 +67,8 @@ class Commander:
     ) -> StageResult:
         await self.daw.log("info", f"AI 生成阶段 [{stage.value}] ...")
         result = await self.ai.generate_stage(stage, user_prompt, context, log_cb=self.daw.log)
-        await self.daw.emit(kind="ai_result", stage=result.stage.value, summary=result.summary)
+        await self.daw.emit(kind="ai_result", stage=result.stage.value, summary=result.summary,
+                            rationale=result.rationale or "")
         await self.execute_stage(result, bpm)
         return result
 

@@ -41,6 +41,11 @@ chrome-profile/
 .browser-profile
 ~/.ai-daw-conductor/
 
+# 日志与截图
+logs/
+*.log
+screenshots/
+
 # Project artifacts
 output/
 renders/

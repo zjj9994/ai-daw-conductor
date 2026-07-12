@@ -5,25 +5,37 @@
      - 跨平台、可靠、可在轨道上编辑。
   2. 实时模式：通过虚拟 MIDI 端口实时发送 Note 开关 / CC，用于现场触发与混音器控制。
      - 需要本机安装 python-rtmidi，且 Logic Pro 开启该端口输入。
+
+增强：鼓组自动路由到 GM 通道 10（channel 9）；可选人性化（力度微抖动 + 时值微偏移，
+基于固定种子的随机，保证可复现）；钢琴/弦乐类轨道自动加延音踏板 CC64。
 """
 from __future__ import annotations
 
 import asyncio
+import random
 import tempfile
 from pathlib import Path
 from typing import Optional
 
 import mido
-from mido import Message, MidiFile, MidiTrack, MetaMessage, bpm2tempo, second2tick
+from mido import Message, MidiFile, MidiTrack, MetaMessage, bpm2tempo
 
 from . import music_theory as mt
 from .models import MidiRegionSpec, NoteSpec, TempoSpec
 
+# GM 标准鼓组在 channel 10（0-indexed 为 9）
+DRUM_CHANNEL = 9
+# 延音踏板 CC 编号
+SUSTAIN_CC = 64
+
 
 class MidiEngine:
-    def __init__(self, midi_port: Optional[str] = None, ticks_per_beat: int = 480):
+    def __init__(self, midi_port: Optional[str] = None, ticks_per_beat: int = 480,
+                 humanize: bool = False, humanize_seed: int = 42):
         self.ticks_per_beat = ticks_per_beat
         self.port_name = midi_port
+        self.humanize = humanize
+        self._rng = random.Random(humanize_seed)  # 固定种子保证可复现
         self._outport = None
         self._connect()
 
@@ -67,35 +79,69 @@ class MidiEngine:
             # mido 用 latin-1 编码 track_name，需转为 ASCII 安全名；
             # Logic Pro 中的真实轨道名由 AppleScript 单独设置
             track.append(MetaMessage("track_name", name=self._ascii_name(region.track), time=0))
-            program = self._guess_program(region.instrument)
-            track.append(Message("program_change", program=program, time=0))
+
+            is_drum = self._is_drum(region.instrument) or self._is_drum(region.track)
+            channel = DRUM_CHANNEL if is_drum else 0
+            program = 0 if is_drum else self._guess_program(region.instrument)
+            track.append(Message("program_change", channel=channel, program=program, time=0))
+
+            # 钢琴/弦乐类加延音踏板
+            use_sustain = (not is_drum) and self._wants_sustain(region.instrument)
+            if use_sustain and region.notes:
+                start_tick = int(round(min(n.start for n in region.notes) * self.ticks_per_beat))
+                track.append(Message("control_change", channel=channel, control=SUSTAIN_CC, value=127, time=start_tick))
 
             notes_sorted = sorted(region.notes, key=lambda n: n.start)
-            abs_tick = 0
-            # 记录每个音符的结束事件，按时间排序后输出
             events: list[tuple[int, str, NoteSpec]] = []
             for n in notes_sorted:
                 start_tick = int(round(n.start * self.ticks_per_beat))
                 end_tick = int(round((n.start + n.duration) * self.ticks_per_beat))
+                if end_tick <= start_tick:
+                    end_tick = start_tick + 1  # 最小 1 tick，避免零长音符
                 events.append((start_tick, "on", n))
                 events.append((end_tick, "off", n))
             events.sort(key=lambda e: (e[0], 0 if e[1] == "off" else 1))
 
+            abs_tick = 0
             for tick, kind, n in events:
                 delta = max(0, tick - abs_tick)
                 abs_tick = tick
                 pitch = mt.resolve_pitch(n.pitch)
-                vel = mt.clamp_velocity(n.velocity)
                 if kind == "on":
-                    track.append(Message("note_on", note=pitch, velocity=vel, time=delta))
+                    vel = mt.clamp_velocity(n.velocity)
+                    if self.humanize and not is_drum:
+                        # 力度微抖动 ±5，保持表情自然
+                        vel = mt.clamp_velocity(vel + self._rng.randint(-5, 5))
+                    track.append(Message("note_on", channel=channel, note=pitch, velocity=vel, time=delta))
                 else:
-                    track.append(Message("note_off", note=pitch, velocity=0, time=delta))
+                    track.append(Message("note_off", channel=channel, note=pitch, velocity=0, time=delta))
+
+            if use_sustain and region.notes:
+                end_tick = int(round(max(n.start + n.duration for n in region.notes) * self.ticks_per_beat))
+                track.append(Message("control_change", channel=channel, control=SUSTAIN_CC, value=0,
+                                     time=max(0, end_tick - abs_tick)))
+
             track.append(MetaMessage("end_of_track", time=0))
             mid.tracks.append(track)
 
         out_path = out_path or Path(tempfile.mkstemp(suffix=".mid")[1])
         mid.save(str(out_path))
         return out_path
+
+    @staticmethod
+    def _is_drum(name: Optional[str]) -> bool:
+        if not name:
+            return False
+        n = name.lower()
+        return any(k in n for k in ("drum", "鼓", "percussion", "打击"))
+
+    @staticmethod
+    def _wants_sustain(instrument: Optional[str]) -> bool:
+        """钢琴/电钢琴/弦乐/铺底类适合自动延音踏板。"""
+        if not instrument:
+            return False
+        n = instrument.lower()
+        return any(k in n for k in ("piano", "grand", "ep", "string", "pad", "organ"))
 
     @staticmethod
     def _ascii_name(name: str) -> str:
@@ -106,7 +152,6 @@ class MidiEngine:
         for ch in name:
             if ord(ch) < 128:
                 out.append(ch)
-            # 保留常见中文轨道的英文提示
         ascii_only = "".join(out).strip()
         return (ascii_only or "Track")[:32]
 

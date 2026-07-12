@@ -40,15 +40,60 @@ DEFAULT_URLS = {
     "custom": "",
 }
 
-# ---------- 选择器默认值（多策略兜底，可在 config.ai.selectors 覆盖）----------
-DEFAULT_SELECTORS = {
-    "input": "textarea, [contenteditable='true']",
-    "input_type": "auto",          # auto | textarea | contenteditable
-    "send": "",                    # 留空则按回车发送
-    "send_via_enter": True,
-    "response": "",                # 留空则用 JS 兜底抓最后一条助手消息
-    "generating": "",              # 「停止生成」按钮选择器，留空则用文本稳定性判断
+# ---------- 各网页 AI 的选择器画像 ----------
+# 这些是基于常见 DOM 的最佳-effort 选择器；网页改版后可在 config.ai.selectors 覆盖。
+# input: 输入框；send: 发送按钮（留空则回车）；response: 助手消息容器；
+# generating: 「停止生成」按钮；new_chat: 新建对话按钮（避免上下文污染）。
+PROVIDER_PROFILES = {
+    "doubao": {
+        "input": "textarea, [contenteditable='true']",
+        "input_type": "auto",
+        "send": "",                 # 豆包回车发送
+        "send_via_enter": True,
+        "response": "",
+        "generating": "button:has-text('停止'), [class*='stop']",
+        "new_chat": "a:has-text('新对话'), button:has-text('新对话')",
+    },
+    "kimi": {
+        "input": "textarea, .chat-input textarea",
+        "input_type": "textarea",
+        "send": "button[aria-label='发送'], .send-button",
+        "send_via_enter": True,
+        "response": ".segment-bottom, [class*='answer']",
+        "generating": "button:has-text('停止')",
+        "new_chat": "a:has-text('新对话'), button:has-text('新建对话')",
+    },
+    "qwen": {
+        "input": "textarea, [contenteditable='true']",
+        "input_type": "auto",
+        "send": "",
+        "send_via_enter": True,
+        "response": "[class*='answer'], [class*='bubble-answer']",
+        "generating": "button:has-text('停止')",
+        "new_chat": "[class*='new-chat'], button:has-text('新建')",
+    },
+    "zhipu": {
+        "input": "textarea, [contenteditable='true']",
+        "input_type": "auto",
+        "send": "",
+        "send_via_enter": True,
+        "response": "[class*='answer'], [class*='markdown']",
+        "generating": "button:has-text('停止')",
+        "new_chat": "button:has-text('新对话')",
+    },
+    "custom": {
+        "input": "textarea, [contenteditable='true']",
+        "input_type": "auto",
+        "send": "",
+        "send_via_enter": True,
+        "response": "",
+        "generating": "",
+        "new_chat": "",
+    },
 }
+
+# 通用兜底（provider 未匹配时使用）
+DEFAULT_SELECTORS = PROVIDER_PROFILES["custom"]
 
 
 SYSTEM_BASE = """你是世界级音乐制作人，精通 Logic Pro 工作流。
@@ -102,14 +147,19 @@ class WebAIDriver:
         ai = cfg.get("ai", {})
         self.provider = ai.get("provider", "doubao")
         self.url = ai.get("web_url") or DEFAULT_URLS.get(self.provider, "")
-        self.selectors = {**DEFAULT_SELECTORS, **(ai.get("selectors") or {})}
+        # 选择器：provider 画像 + 用户覆盖
+        profile = PROVIDER_PROFILES.get(self.provider, DEFAULT_SELECTORS)
+        self.selectors = {**profile, **(ai.get("selectors") or {})}
         self.timeout = float(ai.get("timeout", 180))
+        self.new_chat_per_stage = bool(ai.get("new_chat_per_stage", True))
+        self.retries = int(ai.get("retries", 2))
 
         b = cfg.get("browser", {})
         self.mode = b.get("mode", "cdp")          # cdp | persistent
         self.cdp_url = b.get("cdp_url", "http://127.0.0.1:9222")
         self.user_data_dir = b.get("user_data_dir", "~/.ai-daw-conductor/browser-profile")
         self.headless = bool(b.get("headless", False))
+        self.screenshot_dir = b.get("screenshot_dir", "~/.ai-daw-conductor/screenshots")
 
         self._pw = None
         self._browser = None
@@ -169,11 +219,15 @@ class WebAIDriver:
         return m.group(1) if m else ""
 
     # ---------- 发送与读取 ----------
-    async def chat(self, prompt: str, log_cb=None) -> str:
+    async def chat(self, prompt: str, log_cb=None, new_chat: bool = False) -> str:
         """向网页 AI 发送一条 prompt，返回最新一条助手回复文本。"""
         page = await self.ensure_page()
         if log_cb:
             await log_cb("info", f"向网页 AI 注入提示（{len(prompt)} 字）...")
+
+        if new_chat:
+            await self._start_new_chat(page, log_cb)
+            await page.wait_for_timeout(800)
 
         before_count = await self._assistant_msg_count(page)
 
@@ -184,6 +238,39 @@ class WebAIDriver:
         if log_cb:
             await log_cb("info", f"网页 AI 回复已抓取（{len(text)} 字）")
         return text
+
+    async def _start_new_chat(self, page, log_cb=None):
+        """点击「新对话」按钮，避免上一阶段的上下文污染本阶段决策。"""
+        sel = self.selectors.get("new_chat") or ""
+        if not sel:
+            return
+        try:
+            btn = page.locator(sel).first
+            if await btn.count():
+                await btn.click(timeout=5000)
+                if log_cb:
+                    await log_cb("info", "已开启新对话（避免上下文污染）。")
+        except Exception:
+            # 静默失败：新对话非必需
+            pass
+
+    async def screenshot(self, tag: str = "debug") -> Optional[str]:
+        """失败时截图，便于排查网页 AI 改版/未登录等问题。返回路径或 None。"""
+        if not self._page:
+            return None
+        try:
+            from pathlib import Path
+            from datetime import datetime
+            d = Path(self.screenshot_dir).expanduser()
+            d.mkdir(parents=True, exist_ok=True)
+            name = f"{datetime.now():%Y%m%d_%H%M%S}_{tag}.png"
+            path = d / name
+            await self._page.screenshot(path=str(path), full_page=False)
+            log.info("截图已保存：%s", path)
+            return str(path)
+        except Exception as e:
+            log.debug("截图失败：%s", e)
+            return None
 
     async def _type_and_send(self, page, prompt: str):
         # 聚焦输入框
@@ -366,29 +453,83 @@ class AIEngine:
             SYSTEM_BASE + "\n" + SCHEMA_DESC + "\n" + STAGE_PROMPTS[stage]
             + (f"\n已有上下文（前一阶段产出，需在此基础上延续）：\n{context}" if context else "")
             + f"\n\n用户需求：{user_prompt or '请按你的专业判断完成本阶段。'}"
-            + '\n\n请只输出上述 schema 的 JSON 对象。'
+            + '\n\n请只输出上述 schema 的 JSON 对象，不要包裹在 markdown 代码块里。'
         )
-        raw = await self.driver.chat(full, log_cb=log_cb)
-        data = self._extract_json(raw)
-        if data is None:
-            raise ValueError(f"未能从网页 AI 回复中解析出 JSON（前80字：{raw[:80]!r}）")
-        data = dict(data)
-        data["stage"] = stage.value
-        return StageResult.model_validate(data)
+        # 每阶段开新对话，避免上一阶段的上下文干扰本阶段决策
+        is_first = stage == Stage.COMPOSE
+        new_chat = self.driver.new_chat_per_stage and not is_first
+
+        last_err = None
+        for attempt in range(1, self.driver.retries + 2):  # 初次 + retries 次重试
+            try:
+                if log_cb and attempt > 1:
+                    await log_cb("info", f"第 {attempt} 次尝试调用网页 AI...")
+                raw = await self.driver.chat(full, log_cb=log_cb, new_chat=new_chat)
+                data = self._extract_json(raw)
+                if data is None:
+                    raise ValueError(f"未能从回复中解析 JSON（前80字：{raw[:80]!r}）")
+                data = dict(data)
+                data["stage"] = stage.value
+                result = StageResult.model_validate(data)
+                # 把 AI 原始回复附在 rationale 后，供前端预览
+                if raw and not result.rationale:
+                    result.rationale = raw[:300]
+                return result
+            except Exception as e:
+                last_err = e
+                log.warning("网页 AI 第 %d 次失败：%s", attempt, e)
+                if log_cb:
+                    await log_cb("warn", f"第 {attempt} 次失败：{e}")
+                # 失败时截图便于排查
+                await self.driver.screenshot(tag=f"{stage.value}_fail{attempt}")
+                if attempt <= self.driver.retries:
+                    backoff = 2 * attempt
+                    if log_cb:
+                        await log_cb("info", f"{backoff}s 后重试...")
+                    await asyncio.sleep(backoff)
+        raise last_err  # type: ignore[misc]
 
     @staticmethod
     def _extract_json(raw: str) -> Optional[dict]:
+        """从网页 AI 回复中鲁棒地提取 JSON。
+
+        处理：思考标签 <think>…</think>、markdown 代码块、前后解释文字、
+        多余尾随内容、单引号、尾随逗号等常见问题。
+        """
         if not raw:
             return None
-        raw = raw.strip()
-        if raw.startswith("```"):
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
-        s, e = raw.find("{"), raw.rfind("}")
+        text = raw.strip()
+
+        # 1. 去除思考过程（部分模型会输出 <think>…</think>）
+        text = re.sub(r"<think(?:\s[^>]*)?>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r"<reasoning(?:\s[^>]*)?>.*?</reasoning>", "", text, flags=re.DOTALL | re.IGNORECASE)
+
+        # 2. 优先提取代码块里的 json
+        code_blocks = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+        for block in reversed(code_blocks):
+            parsed = AIEngine._try_parse(block)
+            if parsed is not None:
+                return parsed
+
+        # 3. 截取最外层 { ... }
+        s, e = text.find("{"), text.rfind("}")
         if s != -1 and e != -1 and e > s:
-            raw = raw[s:e + 1]
+            candidate = text[s:e + 1]
+            parsed = AIEngine._try_parse(candidate)
+            if parsed is not None:
+                return parsed
+
+        # 4. 最后兜底：直接整段
+        return AIEngine._try_parse(text)
+
+    @staticmethod
+    def _try_parse(s: str) -> Optional[dict]:
+        s = s.strip()
+        # 去除尾随逗号（JSON 不允许，但 LLM 常加）
+        s = re.sub(r",\s*([}\]])", r"\1", s)
         try:
-            return json.loads(raw)
+            obj = json.loads(s)
+            return obj if isinstance(obj, dict) else None
         except Exception:
             return None
 

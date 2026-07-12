@@ -21,6 +21,10 @@ ai:
   web_url: ""                   # 例：https://www.doubao.com/chat/
   # 单次等待网页 AI 流式回复的超时（秒）
   timeout: 180
+  # 每个阶段开始前是否新建对话（避免上一阶段上下文污染本阶段决策）
+  new_chat_per_stage: true
+  # 网页 AI 调用失败时的重试次数（指数退避）
+  retries: 2
   # 网页 AI 的 DOM 选择器（一般无需改；若页面改版导致抓取失败可在此调整）
   selectors:
     input: "textarea, [contenteditable='true']"   # 输入框
@@ -29,6 +33,7 @@ ai:
     send_via_enter: true
     response: ""                                  # 助手消息容器；留空用 JS 兜底
     generating: ""                                # 「停止生成」按钮选择器；留空用文本稳定性判断
+    new_chat: ""                                  # 「新对话」按钮选择器；留空则不新建
 
 # ---- 浏览器连接 ----
 # 推荐用 CDP 模式：用户先用 scripts/launch_chrome.sh 启动一个带调试端口的
@@ -39,6 +44,8 @@ browser:
   # persistent 模式专用
   user_data_dir: "~/.ai-daw-conductor/browser-profile"
   headless: false                # persistent 模式下是否无头（建议 false 以便首次登录）
+  # 调用失败时截图保存目录（便于排查网页 AI 改版/未登录等问题）
+  screenshot_dir: "~/.ai-daw-conductor/screenshots"
 
 # ---- DAW 控制（Logic Pro）----
 daw:
@@ -50,6 +57,8 @@ daw:
   default_bpm: 100
   default_time_signature: "4/4"
   default_key: "C"
+  # MIDI 人性化：对非鼓组轨道的力度做 ±5 微抖动，让演奏更自然（固定种子可复现）
+  humanize: false
 
 # ---- 工作流默认参数 ----
 workflow:

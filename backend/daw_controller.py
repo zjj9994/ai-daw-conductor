@@ -26,7 +26,10 @@ class DAWController:
     def __init__(self, cfg: dict, event_cb: Optional[EventCB] = None):
         self.cfg = cfg.get("daw", {})
         self.event_cb = event_cb
-        self.midi = MidiEngine(midi_port=self.cfg.get("midi_port"))
+        self.midi = MidiEngine(
+            midi_port=self.cfg.get("midi_port"),
+            humanize=bool(self.cfg.get("humanize", False)),
+        )
         self.applescript = AppleScriptBridge(
             app_name=self.cfg.get("app_name", "Logic Pro"),
             render_dir=self.cfg.get("render_dir", "~/Music/AI-DAW-Conductor/renders"),
