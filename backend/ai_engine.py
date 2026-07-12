@@ -470,6 +470,23 @@ class AIEngine:
     def online(self) -> bool:
         return self._use_web
 
+    async def generate_stage(
+        self,
+        stage: Stage,
+        user_prompt: str,
+        context: Optional[str] = None,
+        log_cb=None,
+    ) -> StageResult:
+        """生成单阶段决策：优先走网页 AI，失败/离线降级到 demo 生成器。"""
+        if self._use_web:
+            try:
+                return await self._generate_via_web(stage, user_prompt, context, log_cb)
+            except Exception as e:
+                log.warning("网页 AI 调用失败 (%s)，降级到内置生成器。", e)
+                if log_cb:
+                    await log_cb("warn", f"网页 AI 调用失败：{e}，本阶段降级为 demo。")
+        return self._generate_demo(stage, user_prompt, context)
+
     async def health_check(self) -> bool:
         """转发到 driver 的健康检查（demo 模式恒为 True）。"""
         if not self._use_web:
