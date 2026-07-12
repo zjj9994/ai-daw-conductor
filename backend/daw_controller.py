@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
@@ -74,8 +75,10 @@ class DAWController:
     # ---------- MIDI 区域 ----------
     async def add_region(self, region: MidiRegionSpec, bpm: float):
         await self.log("info", f"写入 MIDI 片段到轨道「{region.track}」，{len(region.notes)} 个音符")
-        # 生成 MIDI 文件
-        mid_path = self.midi.build_midi_file([region], TempoSpec(bpm=bpm))
+        # 生成 MIDI 文件（存到 render_dir 便于用户下载/回放）
+        safe_name = "".join(c for c in region.track if c.isalnum() or c in "-_")[:24] or "track"
+        out_path = self.applescript.render_dir / f"{safe_name}_{int(time.time() * 1000) % 1000000}.mid"
+        mid_path = self.midi.build_midi_file([region], TempoSpec(bpm=bpm), out_path=out_path)
         await self.emit(kind="midi_generated", track=region.track,
                         path=str(mid_path), note_count=len(region.notes))
         if self.use_applescript and self.applescript.available:

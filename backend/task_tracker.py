@@ -1,15 +1,23 @@
 """任务追踪：记录当前任务状态、阶段进度、渲染历史。
 
 供 REST 轮询（/api/task/status、/api/renders）与前端展示使用。
-所有状态在内存中维护（单进程会话级），不持久化。
+任务状态在内存中维护（单进程会话级）；渲染历史可选持久化到 JSON 文件，重启后自动恢复。
 """
 from __future__ import annotations
 
+import json
+import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
 from typing import Optional
 
 from .models import Stage
+
+log = logging.getLogger("task_tracker")
+
+# 默认持久化路径（渲染历史）。可在构造时覆盖。
+DEFAULT_HISTORY_FILE = Path.home() / ".ai-daw-conductor" / "render_history.json"
 
 
 @dataclass
@@ -19,6 +27,8 @@ class RenderRecord:
     stage: str           # 通常是 "master"
     timestamp: float
     size: int = 0
+    task_mode: str = ""  # pipeline | stage
+    prompt: str = ""     # 当时使用的创作指令（便于回溯）
 
 
 @dataclass
@@ -60,11 +70,17 @@ class TaskStatus:
 
 
 class TaskTracker:
-    """全局任务追踪器（单例，由 server 持有）。"""
+    """全局任务追踪器（单例，由 server 持有）。
 
-    def __init__(self):
+    Args:
+        history_file: 渲染历史持久化路径；传 None 则仅内存（不落盘）。
+    """
+
+    def __init__(self, history_file: Optional[Path] = None):
         self.status = TaskStatus()
         self.renders: list[RenderRecord] = []
+        self.history_file = history_file
+        self._load_history()
 
     # ---------- 任务生命周期 ----------
     def start(self, mode: str, prompt: str = "", total: int = 4):
@@ -97,15 +113,53 @@ class TaskTracker:
         self.status = TaskStatus()
 
     # ---------- 渲染历史 ----------
-    def add_render(self, path: str, filename: str, stage: str = "master", size: int = 0):
-        rec = RenderRecord(path=path, filename=filename, stage=stage,
-                           timestamp=time.time(), size=size)
+    def add_render(self, path: str, filename: str, stage: str = "master",
+                   size: int = 0, task_mode: str = "", prompt: str = ""):
+        rec = RenderRecord(
+            path=path, filename=filename, stage=stage,
+            timestamp=time.time(), size=size,
+            task_mode=task_mode or self.status.mode,
+            prompt=prompt or self.status.prompt,
+        )
         self.renders.append(rec)
+        self._save_history()
         return rec
 
     def renders_dict(self) -> list[dict]:
         return [
             {"path": r.path, "filename": r.filename, "stage": r.stage,
-             "timestamp": r.timestamp, "size": r.size}
+             "timestamp": r.timestamp, "size": r.size,
+             "task_mode": r.task_mode, "prompt": r.prompt}
             for r in self.renders
         ]
+
+    def clear_history(self) -> int:
+        """清空渲染历史记录（不删磁盘文件）。返回被清除的条数。"""
+        n = len(self.renders)
+        self.renders = []
+        self._save_history()
+        return n
+
+    # ---------- 持久化 ----------
+    def _load_history(self):
+        if not self.history_file:
+            return
+        try:
+            if self.history_file.exists():
+                data = json.loads(self.history_file.read_text(encoding="utf-8"))
+                self.renders = [RenderRecord(**item) for item in data.get("renders", [])]
+                log.info("已加载 %d 条渲染历史记录", len(self.renders))
+        except Exception as e:
+            log.warning("加载渲染历史失败：%s", e)
+
+    def _save_history(self):
+        if not self.history_file:
+            return
+        try:
+            self.history_file.parent.mkdir(parents=True, exist_ok=True)
+            data = {"renders": [asdict(r) for r in self.renders]}
+            self.history_file.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception as e:
+            log.warning("保存渲染历史失败：%s", e)

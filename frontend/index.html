@@ -36,8 +36,14 @@
     <!-- 左：控制台 -->
     <section class="console">
       <div class="panel prompt-panel">
-        <label class="panel-label">创作指令</label>
+        <label class="panel-label">创作指令
+          <button class="ghost-btn mini" id="btn-save-template" title="把当前指令存为模板">存为模板</button>
+        </label>
         <textarea id="prompt" class="prompt-input" placeholder="描述你想要的作品，例如：&#10;一首 100BPM 的 A 小调抒情流行，钢琴主导，副歌加入弦乐与鼓组，温暖治愈的氛围。"></textarea>
+        <div class="template-row">
+          <span class="template-label">模板：</span>
+          <div id="template-list" class="template-list"><span class="empty">暂无模板</span></div>
+        </div>
         <div class="prompt-actions">
           <div class="stage-toggles" role="group" aria-label="阶段选择">
             <button class="stage-btn active" data-mode="pipeline">全流程</button>
@@ -127,7 +133,9 @@
       </div>
 
       <div class="panel history-panel">
-        <label class="panel-label">渲染历史 <span class="muted" id="render-count">0</span></label>
+        <label class="panel-label">渲染历史 <span class="muted" id="render-count">0</span>
+          <button class="ghost-btn mini" id="btn-clear-renders" title="清空历史">清空</button>
+        </label>
         <div id="render-history" class="render-history">
           <div class="empty">尚未导出任何作品</div>
         </div>

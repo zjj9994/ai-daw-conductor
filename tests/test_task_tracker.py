@@ -1,5 +1,8 @@
 """单元测试：任务追踪器。运行 `pytest tests/`"""
-from backend.task_tracker import TaskTracker
+import json
+from pathlib import Path
+
+from backend.task_tracker import TaskTracker, RenderRecord
 
 
 def test_start_sets_running_state():
@@ -94,3 +97,51 @@ def test_to_dict_contains_expected_fields():
         assert key in d
     assert d["state"] == "running"
     assert d["prompt"] == "hi"
+
+
+def test_add_render_captures_task_context(tmp_path):
+    t = TaskTracker(history_file=None)
+    t.start(mode="pipeline", prompt="测试指令", total=4)
+    rec = t.add_render(path="/tmp/x.wav", filename="x", stage="master", size=10)
+    assert rec.task_mode == "pipeline"
+    assert rec.prompt == "测试指令"
+
+
+def test_persistence_roundtrip(tmp_path):
+    f = tmp_path / "history.json"
+    t1 = TaskTracker(history_file=f)
+    t1.add_render(path="/tmp/a.wav", filename="a", stage="master", size=100)
+    t1.add_render(path="/tmp/b.wav", filename="b", stage="master", size=200)
+    assert f.exists()
+    # 新实例应从文件加载历史
+    t2 = TaskTracker(history_file=f)
+    assert len(t2.renders) == 2
+    assert t2.renders[0].filename == "a"
+    assert t2.renders[1].size == 200
+
+
+def test_clear_history_empties_renders(tmp_path):
+    f = tmp_path / "history.json"
+    t = TaskTracker(history_file=f)
+    t.add_render(path="/tmp/a.wav", filename="a", stage="master")
+    assert len(t.renders) == 1
+    n = t.clear_history()
+    assert n == 1
+    assert len(t.renders) == 0
+    # 清空也应落盘
+    data = json.loads(f.read_text(encoding="utf-8"))
+    assert data["renders"] == []
+
+
+def test_no_history_file_means_memory_only():
+    t = TaskTracker(history_file=None)
+    t.add_render(path="/tmp/a.wav", filename="a", stage="master")
+    # 没有文件也不会报错
+    assert len(t.renders) == 1
+
+
+def test_render_record_dataclass_fields():
+    r = RenderRecord(path="/x", filename="y", stage="master", timestamp=1.0)
+    assert r.size == 0
+    assert r.task_mode == ""
+    assert r.prompt == ""

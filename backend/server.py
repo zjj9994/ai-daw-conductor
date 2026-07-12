@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -37,7 +37,7 @@ from .daw_controller import DAWController
 from .diagnostics import run_diagnostics
 from .logging_config import setup_logging
 from .models import Stage
-from .task_tracker import TaskTracker
+from .task_tracker import TaskTracker, DEFAULT_HISTORY_FILE
 
 setup_logging()
 log = logging.getLogger("server")
@@ -48,7 +48,7 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 _state: dict = {"ai": None, "daw": None, "commander": None, "cfg": {}}
 _ws_clients: set[WebSocket] = set()
 _current_task: Optional[asyncio.Task] = None
-tracker = TaskTracker()
+tracker = TaskTracker(history_file=DEFAULT_HISTORY_FILE)
 
 
 def _build_engines(cfg: dict):
@@ -264,6 +264,60 @@ async def api_task_status():
 async def api_renders():
     """渲染历史。"""
     return {"renders": tracker.renders_dict(), "count": len(tracker.renders)}
+
+
+@app.delete("/api/renders")
+async def api_renders_clear():
+    """清空渲染历史记录（不删磁盘文件）。"""
+    n = tracker.clear_history()
+    return {"ok": True, "cleared": n}
+
+
+@app.get("/api/renders/{idx}/download")
+async def api_render_download(idx: int):
+    """按索引下载渲染历史中的导出文件。"""
+    if idx < 0 or idx >= len(tracker.renders):
+        return JSONResponse({"error": "索引越界"}, status_code=404)
+    rec = tracker.renders[idx]
+    p = Path(rec.path)
+    if not p.exists():
+        return JSONResponse({"error": f"文件不存在：{rec.path}"}, status_code=404)
+    return FileResponse(p, filename=f"{rec.filename}.{_guess_ext(p)}")
+
+
+@app.get("/api/midis")
+async def api_midis():
+    """列出已生成的 MIDI 文件（扫描 DAW render_dir 与临时目录）。"""
+    daw = _state.get("cfg", {}).get("daw", {})
+    render_dir = Path(daw.get("render_dir", "~/Music/AI-DAW-Conductor/renders")).expanduser()
+    midis: list[dict] = []
+    if render_dir.exists():
+        for p in sorted(render_dir.glob("*.mid*"), key=lambda x: x.stat().st_mtime, reverse=True):
+            st = p.stat()
+            midis.append({
+                "path": str(p), "filename": p.name,
+                "size": st.st_size, "mtime": st.st_mtime,
+            })
+    return {"midis": midis, "count": len(midis)}
+
+
+@app.get("/api/midis/download")
+async def api_midi_download(path: str):
+    """下载指定路径的 MIDI 文件（路径必须在 render_dir 之下，防越权）。"""
+    daw = _state.get("cfg", {}).get("daw", {})
+    render_dir = Path(daw.get("render_dir", "~/Music/AI-DAW-Conductor/renders")).expanduser()
+    target = Path(path).expanduser()
+    try:
+        target.resolve().relative_to(render_dir.resolve())
+    except ValueError:
+        return JSONResponse({"error": "路径不在允许的目录内"}, status_code=403)
+    if not target.exists() or not target.is_file():
+        return JSONResponse({"error": "文件不存在"}, status_code=404)
+    return FileResponse(target, filename=target.name)
+
+
+def _guess_ext(p: Path) -> str:
+    return p.suffix.lstrip(".") or "bin"
 
 
 @app.post("/api/browser/connect")

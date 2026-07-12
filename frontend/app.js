@@ -69,7 +69,8 @@ function handle(evt) {
       break;
     case "bounce_done":
       renderBounce(evt.path);
-      addRenderHistory(evt.filename || evt.path.split("/").pop(), evt.path);
+      // 不直接 add（无索引无法下载），改为拉取服务端历史以保证下载链接可用
+      loadRenderHistory();
       break;
     case "stage_start":
       setStageState(evt.stage, "running");
@@ -239,19 +240,56 @@ function renderAIPreview(stage, summary, rationale) {
   box.scrollTop = box.scrollHeight;
 }
 
-function addRenderHistory(filename, path) {
+function addRenderHistory(filename, path, idx) {
   const box = $("#render-history");
   if (box.querySelector(".empty")) box.innerHTML = "";
   const item = document.createElement("div");
   item.className = "render-item";
   const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
-  item.innerHTML = `<span class="ricon">◈</span><span class="rname"></span><span class="rmeta"></span>`;
+  item.innerHTML = `<span class="ricon">◈</span><span class="rname"></span><span class="rmeta"></span><a class="rlink" title="下载">↓</a>`;
   item.querySelector(".rname").textContent = filename;
   item.querySelector(".rmeta").textContent = time;
   item.title = path;
+  // 下载链接：用索引（服务端按索引查找）
+  const link = item.querySelector(".rlink");
+  if (idx != null) {
+    link.href = `/api/renders/${idx}/download`;
+    link.target = "_blank";
+  } else {
+    link.style.display = "none";
+  }
   box.insertBefore(item, box.firstChild);
   const count = box.querySelectorAll(".render-item").length;
   $("#render-count").textContent = count;
+}
+
+async function loadRenderHistory() {
+  try {
+    const r = await (await fetch("/api/renders")).json();
+    const box = $("#render-history");
+    box.innerHTML = "";
+    if (!r.count) {
+      box.innerHTML = '<div class="empty">尚未导出任何作品</div>';
+      $("#render-count").textContent = "0";
+      return;
+    }
+    // 服务端 renders 按时间顺序；前端倒序展示，索引对应原列表
+    r.renders.forEach((rec, i) => {
+      addRenderHistory(rec.filename, rec.path, i);
+    });
+    $("#render-count").textContent = r.count;
+  } catch (e) {}
+}
+
+async function clearRenderHistory() {
+  if (!confirm("确定清空渲染历史记录吗？（不会删除磁盘文件）")) return;
+  try {
+    await fetch("/api/renders", { method: "DELETE" });
+    await loadRenderHistory();
+    addLog("info", "已清空渲染历史", "event");
+  } catch (e) {
+    addLog("error", "清空失败：" + e, "log");
+  }
 }
 
 function setProgress(pct, label) {
@@ -428,7 +466,60 @@ $("#modal-diagnostics").addEventListener("click", (e) => {
 
 // ---------- 设置 ----------
 const LS_KEY = "ai-daw-conductor-settings";
+const LS_TEMPLATES = "ai-daw-conductor-templates";
 const modal = $("#modal-settings");
+
+// ---------- 创作指令模板 ----------
+function loadTemplates() {
+  try { return JSON.parse(localStorage.getItem(LS_TEMPLATES) || "[]"); } catch (e) { return []; }
+}
+function saveTemplates(arr) {
+  try { localStorage.setItem(LS_TEMPLATES, JSON.stringify(arr)); } catch (e) {}
+}
+function renderTemplateList() {
+  const box = $("#template-list");
+  const tpls = loadTemplates();
+  box.innerHTML = "";
+  if (!tpls.length) {
+    box.innerHTML = '<span class="empty">暂无模板</span>';
+    return;
+  }
+  tpls.forEach((t, i) => {
+    const chip = document.createElement("span");
+    chip.className = "template-chip";
+    chip.title = t.text;
+    const name = document.createElement("span");
+    name.textContent = t.name;
+    name.addEventListener("click", () => {
+      $("#prompt").value = t.text;
+      $("#prompt").focus();
+    });
+    const del = document.createElement("span");
+    del.className = "tpl-del";
+    del.textContent = "×";
+    del.title = "删除模板";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const arr = loadTemplates();
+      arr.splice(i, 1);
+      saveTemplates(arr);
+      renderTemplateList();
+    });
+    chip.appendChild(name);
+    chip.appendChild(del);
+    box.appendChild(chip);
+  });
+}
+function saveCurrentAsTemplate() {
+  const text = $("#prompt").value.trim();
+  if (!text) { addLog("warn", "指令为空，无法保存为模板", "log"); return; }
+  const name = text.slice(0, 12).replace(/\s+/g, " ");
+  const arr = loadTemplates();
+  arr.push({ name, text, ts: Date.now() });
+  saveTemplates(arr);
+  renderTemplateList();
+  addLog("info", `已保存模板「${name}」`, "event");
+}
 
 function loadLocalSettings() {
   try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch (e) { return {}; }
@@ -547,5 +638,13 @@ fetch("/api/health").then((r) => r.json()).then((h) => {
   }
   draw();
 })();
+
+// ---------- 初始化 ----------
+loadRenderHistory();
+renderTemplateList();
+const btnClearRenders = $("#btn-clear-renders");
+if (btnClearRenders) btnClearRenders.addEventListener("click", clearRenderHistory);
+const btnSaveTpl = $("#btn-save-template");
+if (btnSaveTpl) btnSaveTpl.addEventListener("click", saveCurrentAsTemplate);
 
 connect();

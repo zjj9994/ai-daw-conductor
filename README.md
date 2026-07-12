@@ -63,9 +63,10 @@ ai-daw-conductor/
 │   ├── run.sh               # 启动服务
 │   ├── launch_chrome.sh     # 启动带调试端口的 Chrome（用于网页 AI 登录）
 │   └── logic_setup.scpt     # Logic Pro 环境准备（macOS）
-├── tests/                   # 单元测试（乐理 / JSON 提取 / MIDI 引擎）
+├── tests/                   # 单元测试（乐理 / JSON 提取 / MIDI / 配置 / 诊断 / 任务追踪）
 ├── config/
 │   └── config.example.yaml  # 配置模板
+├── .github/workflows/ci.yml # GitHub Actions：push/PR 自动跑测试
 ├── Dockerfile               # 非 macOS 开发/测试镜像
 ├── requirements.txt
 └── README.md
@@ -134,7 +135,11 @@ osascript scripts/logic_setup.scpt
 | POST | `/api/pipeline` | 执行完整四阶段流水线 |
 | GET  | `/api/task/status` | 当前任务状态与进度（供轮询） |
 | POST | `/api/cancel` | 取消当前任务 |
-| GET  | `/api/renders` | 渲染历史（导出文件列表） |
+| GET  | `/api/renders` | 渲染历史（导出文件列表，重启后仍保留） |
+| DELETE | `/api/renders` | 清空渲染历史记录（不删磁盘文件） |
+| GET  | `/api/renders/{idx}/download` | 下载渲染历史中指定导出文件 |
+| GET  | `/api/midis` | 列出已生成的 MIDI 文件 |
+| GET  | `/api/midis/download?path=` | 下载指定 MIDI 文件（路径需在 render_dir 下） |
 | WS   | `/ws` | 实时事件流（日志/进度/轨道/混音/导出） |
 
 ## ⚙️ 配置项
@@ -168,6 +173,14 @@ osascript scripts/logic_setup.scpt
 | AppleScript | Logic Pro 实控（仅 macOS） | 非 macOS 自动降级为模拟模式 |
 
 诊断结果会附上针对性建议。出错后修复对应项，刷新页面再点「诊断」复查即可。前端会自动轮询 `/api/task/status`（每 1.5s）更新进度条与阶段状态；某阶段失败时会高亮为红色并显示「重试阶段」按钮，点击即可用同一指令重跑该阶段。
+
+### 渲染历史与下载
+
+每次导出（Bounce）都会记入渲染历史，并**持久化到 `~/.ai-daw-conductor/render_history.json`**，重启服务后仍可查看。前端「渲染历史」面板里每条记录右侧有下载按钮（`GET /api/renders/{idx}/download`），点「清空」可清除记录（不删磁盘文件）。生成的 MIDI 文件存放在 `daw.render_dir`，可通过 `GET /api/midis` 列出、`GET /api/midis/download?path=` 下载（路径必须在 render_dir 下，防越权）。
+
+### 创作指令模板
+
+指令输入框下方有「模板」栏：点「存为模板」把当前指令存入浏览器本地存储，之后点模板名即可一键填入，点「×」删除。模板只在当前浏览器保留，不上传服务端。
 
 ## 🛠️ 故障排查
 
