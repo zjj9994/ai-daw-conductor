@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual env
+bin/
+lib/
+pyvenv.cfg
+share/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Secrets / config
+config/config.yaml
+config/config.yml
+config/config.json
+.env
+.env.*
+*.key
+secrets/
+
+# Project artifacts
+output/
+renders/
+*.mid
+*.midi
+*.wav
+*.aiff
+*.aif
+*.mp3
+*.flac
+*.logicx
+*.logicx.zip
+projects/
+sessions/
+logs/
+*.log
+
+# Node (frontend tooling if added later)
+node_modules/
+package-lock.json

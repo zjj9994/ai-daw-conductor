@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI-DAW-Conductor · 网页 AI 指挥 Logic Pro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@300;500;700;900&family=JetBrains+Mono:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <!-- 背景示波器 -->
+  <canvas id="scope" class="scope" aria-hidden="true"></canvas>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <span class="bar b1"></span><span class="bar b2"></span><span class="bar b3"></span><span class="bar b4"></span>
+      </div>
+      <div class="brand-text">
+        <h1>AI·DAW·CONDUCTOR</h1>
+        <p>网页端 AI 指挥 Logic Pro — 作曲 / 编曲 / 混音 / 母带</p>
+      </div>
+    </div>
+    <div class="status">
+      <span class="chip" id="chip-ai"><i class="dot"></i>AI 离线</span>
+      <span class="chip" id="chip-daw"><i class="dot"></i>DAW 模拟</span>
+      <button class="ghost-btn" id="btn-settings">设置</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- 左：控制台 -->
+    <section class="console">
+      <div class="panel prompt-panel">
+        <label class="panel-label">创作指令</label>
+        <textarea id="prompt" class="prompt-input" placeholder="描述你想要的作品，例如：&#10;一首 100BPM 的 A 小调抒情流行，钢琴主导，副歌加入弦乐与鼓组，温暖治愈的氛围。"></textarea>
+        <div class="prompt-actions">
+          <div class="stage-toggles" role="group" aria-label="阶段选择">
+            <button class="stage-btn active" data-mode="pipeline">全流程</button>
+            <button class="stage-btn" data-stage="compose">作曲</button>
+            <button class="stage-btn" data-stage="arrange">编曲</button>
+            <button class="stage-btn" data-stage="mix">混音</button>
+            <button class="stage-btn" data-stage="master">母带</button>
+          </div>
+          <div class="run-actions">
+            <button id="btn-cancel" class="ghost-btn warn" disabled>取消</button>
+            <button id="btn-run" class="primary-btn">开始制作</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 阶段流水线 -->
+      <div class="panel">
+        <label class="panel-label">制作流水线</label>
+        <ol class="pipeline" id="pipeline">
+          <li class="stage-node" data-stage="compose">
+            <span class="node-idx">01</span>
+            <span class="node-name">作曲 Compose</span>
+            <span class="node-state">待命</span>
+          </li>
+          <li class="stage-node" data-stage="arrange">
+            <span class="node-idx">02</span>
+            <span class="node-name">编曲 Arrange</span>
+            <span class="node-state">待命</span>
+          </li>
+          <li class="stage-node" data-stage="mix">
+            <span class="node-idx">03</span>
+            <span class="node-name">混音 Mix</span>
+            <span class="node-state">待命</span>
+          </li>
+          <li class="stage-node" data-stage="master">
+            <span class="node-idx">04</span>
+            <span class="node-name">母带 Master</span>
+            <span class="node-state">待命</span>
+          </li>
+        </ol>
+      </div>
+
+      <!-- 事件日志 -->
+      <div class="panel log-panel">
+        <label class="panel-label">实时日志 <span class="muted" id="log-count">0</span></label>
+        <div id="log" class="log"></div>
+      </div>
+    </section>
+
+    <!-- 右：状态面板 -->
+    <aside class="side">
+      <div class="panel project-panel">
+        <label class="panel-label">作品信息</label>
+        <div id="project-info" class="project-info">
+          <div class="empty">尚未生成作品</div>
+        </div>
+      </div>
+
+      <div class="panel tracks-panel">
+        <label class="panel-label">轨道 <span class="muted" id="track-count">0</span></label>
+        <div id="tracks" class="tracks">
+          <div class="empty">无轨道</div>
+        </div>
+      </div>
+
+      <div class="panel mix-panel">
+        <label class="panel-label">混音台</label>
+        <div id="mixer" class="mixer">
+          <div class="empty">无混音数据</div>
+        </div>
+      </div>
+
+      <div class="panel render-panel">
+        <label class="panel-label">母带导出</label>
+        <div id="render" class="render">
+          <div class="empty">未导出</div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- 设置弹层 -->
+  <div class="modal" id="modal-settings" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>AI 模型设置</h2>
+        <button class="ghost-btn" id="btn-close-settings">关闭</button>
+      </div>
+      <p class="modal-hint">填入火山方舟 Ark 的 API Key 与豆包推理接入点（model）即可启用真实 AI。留空则使用内置 demo 生成器。</p>
+      <div class="form">
+        <label>Provider
+          <select id="set-provider">
+            <option value="doubao">豆包 Doubao (Volcengine Ark)</option>
+            <option value="openai">OpenAI 兼容</option>
+            <option value="custom">自定义</option>
+          </select>
+        </label>
+        <label>Base URL
+          <input id="set-baseurl" type="text" placeholder="https://ark.cn-beijing.volces.com/api/v3" />
+        </label>
+        <label>Model（接入点 id，如 ep-xxxx 或 doubao-pro-32k）
+          <input id="set-model" type="text" placeholder="ep-xxxxxxxxxxxxxxxx" />
+        </label>
+        <label>API Key
+          <input id="set-apikey" type="password" placeholder="sk- / ark- 开头的密钥" />
+        </label>
+        <label>Temperature
+          <input id="set-temp" type="number" step="0.1" min="0" max="2" value="0.8" />
+        </label>
+      </div>
+      <div class="modal-foot">
+        <span id="set-status" class="muted"></span>
+        <button class="primary-btn" id="btn-save-settings">保存并应用</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <span>AI-DAW-Conductor · 本地运行，AI 决策 + Logic Pro 执行 · macOS 实控 / 其它平台模拟</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

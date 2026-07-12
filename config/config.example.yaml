@@ -1,0 +1,54 @@
+# ====================================================================
+# AI-DAW-Conductor 配置示例
+# 复制为 config.yaml 并填入你的真实凭证后使用（config.yaml 已被 .gitignore 忽略）
+# ====================================================================
+
+server:
+  host: "127.0.0.1"
+  port: 8787
+  # 允许的前端跨域来源；本地开发可留 *
+  cors_origins:
+    - "http://localhost:8787"
+    - "http://127.0.0.1:8787"
+
+# ---- AI 模型（豆包 / 火山方舟 Ark，OpenAI 兼容接口）----
+# 申请入口：https://console.volcengine.com/ark  -> 在线推理 -> 创建推理接入点(ep)
+# 把 ep-xxx 填到 model 字段，或在控制台选用 doubao-* 系列模型后复制接入点 id
+ai:
+  provider: "doubao"            # doubao | openai | custom
+  base_url: "https://ark.cn-beijing.volces.com/api/v3"
+  api_key: "YOUR_VOLCENGINE_ARK_API_KEY"
+  model: "ep-xxxxxxxxxxxxxxxx"  # 豆包推理接入点 id，或 doubao-pro-32k 等模型名
+  temperature: 0.8
+  max_tokens: 4096
+  # 请求超时（秒）
+  timeout: 120
+
+# ---- DAW 控制（Logic Pro）----
+daw:
+  type: "logic_pro"
+  # 控制 MIDI 输出的虚拟端口名（Logic Pro 里需开启该端口的输入）
+  midi_port: "AI-DAW-Conductor"
+  # 是否使用 AppleScript 控制轨道/混音器/导出（仅 macOS 可用）
+  use_applescript: true
+  # Logic Pro 应用名
+  app_name: "Logic Pro"
+  # 导出（Bounce）默认目录
+  render_dir: "~/Music/AI-DAW-Conductor/renders"
+  # 默认 BPM / 拍号
+  default_bpm: 100
+  default_time_signature: "4/4"
+  default_key: "C"
+
+# ---- 工作流默认参数 ----
+workflow:
+  # 完整制作流程顺序
+  pipeline:
+    - compose
+    - arrange
+    - mix
+    - master
+  # 每个阶段的 AI 重试次数
+  max_retries: 2
+  # 是否在导出母带后自动打开渲染目录
+  open_render_dir: true
