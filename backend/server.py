@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -109,7 +109,9 @@ if FRONTEND_DIR.exists():
 async def index():
     index_file = FRONTEND_DIR / "index.html"
     if index_file.exists():
-        return index_file.read_text(encoding="utf-8")
+        # 用 HTMLResponse 显式指定 text/html; charset=utf-8
+        # 否则返回 str 会被当成 text/plain，浏览器不渲染 HTML 且中文乱码
+        return HTMLResponse(index_file.read_text(encoding="utf-8"))
     return JSONResponse({"message": "AI-DAW-Conductor API running. Frontend not found."})
 
 
