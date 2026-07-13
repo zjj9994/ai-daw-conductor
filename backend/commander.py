@@ -49,10 +49,19 @@ class Commander:
         await self.daw.log("info", f"===== 执行阶段：{result.stage.value} =====")
         await self.daw.emit(kind="stage_start", stage=result.stage.value, summary=result.summary)
 
-        # 1. 工程
+        # 1. 工程 —— 只有作曲阶段才允许新建工程，确保一首音乐的所有操作指向同一个工程
         if result.project:
-            await self.daw.create_project(result.project.tempo, result.project.title)
-            bpm = result.project.tempo.bpm
+            if result.stage == Stage.COMPOSE:
+                await self.daw.create_project(result.project.tempo, result.project.title)
+                bpm = result.project.tempo.bpm
+            else:
+                # 非 compose 阶段若 AI 误输出 project 字段，忽略以防意外新建/切换工程
+                await self.daw.log(
+                    "warn",
+                    f"[{result.stage.value}] 阶段忽略了 project 字段："
+                    f"工程已在作曲阶段创建为「{self.daw.current_project_title}」，"
+                    "一首音乐的所有操作必须指向同一个 Logic Pro 工程。",
+                )
 
         # 2. 速度变化（在轨道/片段之前，像人类先定速度曲线）
         for tc in result.tempo_changes:
@@ -160,7 +169,7 @@ class Commander:
         return result
 
     async def run_pipeline(self, user_prompt: str) -> list[StageResult]:
-        """完整四阶段流水线。"""
+        """完整四阶段流水线：作曲→编曲→混音→母带，所有操作指向同一个 Logic Pro 工程。"""
         self._cancel = False
         results: list[StageResult] = []
         context = ""
@@ -170,11 +179,20 @@ class Commander:
                 await self.daw.log("warn", "流水线已被取消。")
                 break
             await self.execute_stage(result, bpm)
-            if result.project:
+            if result.project and result.stage == Stage.COMPOSE:
                 bpm = result.project.tempo.bpm
             context += f"\n[{result.stage.value}] {result.summary}"
+            # 把工程路径注入上下文，让后续阶段明确知道所有操作指向同一个工程
+            if self.daw.current_project_path and not context.startswith("[工程]"):
+                context = (f"[工程] 当前 Logic Pro 工程：{self.daw.current_project_title}"
+                           f"（{self.daw.current_project_path}）。"
+                           "后续所有阶段都在这同一个工程上操作，禁止新建/打开/关闭工程。"
+                           + context)
             results.append(result)
             await self.daw.emit(kind="pipeline_progress", completed=result.stage.value,
                                 done=len(results), total=4)
+        # 流水线结束前保存工程，确保所有改动落盘
+        if self.daw.current_project_path:
+            await self.daw.save_project()
         await self.daw.emit(kind="pipeline_done", stages=[r.stage.value for r in results])
         return results

@@ -247,9 +247,13 @@ class ProjectPlan(BaseModel):
 
 # ---------- 通用动作（保存/撤销/视图） ----------
 class UIAction(BaseModel):
-    """UI/工程级动作（像人类点菜单）。"""
-    op: str = Field(description="save | save_as | open | close | undo | redo | open_piano_roll | open_mixer | open_inspector | zoom_fit | toggle_track | select_all | collapse_all")
-    path: Optional[str] = Field(default=None, description="save_as/open 用的文件路径")
+    """UI/工程级动作（像人类点菜单）。
+
+    工程一致性约束：禁止 open/close/save_as——一首音乐的所有操作指向同一个工程，
+    系统在作曲阶段统一创建并保存工程，AI 不得切换/关闭工程。
+    """
+    op: str = Field(description="save | undo | redo | open_piano_roll | open_mixer | open_inspector | zoom_fit | toggle_track | select_all | collapse_all（禁止 open/close/save_as）")
+    path: Optional[str] = Field(default=None, description="已弃用：工程路径由系统统一管理")
     track: Optional[str] = Field(default=None, description="toggle_track/select 用")
 
 

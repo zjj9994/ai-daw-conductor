@@ -195,6 +195,10 @@ JSON 必须可被 python json.loads 直接解析，并严格符合给定的 sche
   Limiter Ceiling 必须 ≤ true_peak_ceiling，攻击时间 5-10ms，释放 50-100ms。
 
 关键原则：
+- 【工程一致性·最重要】一首音乐的所有操作（作曲/编曲/混音/母带/导出）必须指向同一个 Logic Pro 工程。
+  只有作曲（compose）阶段会新建工程并另存为到磁盘；编曲/混音/母带阶段严禁输出 project 字段，
+  严禁输出 actions 里的 open/close 动作（系统会忽略并警告）。所有轨道、片段、混音、母带、导出
+  都在作曲阶段创建的那个工程上进行，像人类制作人做完一首歌那样——从头到尾一个工程文件。
 - 整首作品必须连贯：段落之间有逻辑递进（如前奏→主歌→副歌→桥段→尾奏），调性统一，速度一致。
 - 后续阶段必须延续前一阶段已确定的标题、调性、速度、段落结构与轨道命名，不得推翻重来。
 - 你的目标是产出完整的、可独立播放的、达到商业发行水准的成品，而非片段 demo。
@@ -229,6 +233,10 @@ SCHEMA_DESC = """
   "actions": [{"op":"save"},{"op":"open_mixer"}],
   "rationale": "创作思路解释（中文）"
 }
+
+注意：actions 的 op 只允许 save/undo/redo/open_piano_roll/open_mixer/open_inspector/zoom_fit/
+toggle_track/select_all/collapse_all，严禁 open/close/save_as（系统已统一管理工程路径）。
+只有 compose 阶段输出 project 字段，arrange/mix/master 阶段不得输出 project。
 """
 
 STAGE_PROMPTS = {
@@ -248,6 +256,8 @@ STAGE_PROMPTS = {
   * 力度要分层：intro pp、verse mp、chorus mf-f、bridge 做动态对比；
 - rationale 里说明动机发展、段落对比与情感走向，让后续阶段能延续你的创意。""",
     Stage.ARRANGE: """阶段：编曲（arrange）—— 必须延续作曲阶段确定的标题/调性/速度/段落结构。
+【工程一致性】本阶段在作曲阶段已创建的同一个 Logic Pro 工程上操作，严禁输出 project 字段
+（系统会忽略并警告），严禁输出 actions 里的 open/close。只能新增轨道与片段，不得新建工程。
 在已有作曲基础上完成：决定乐器配置与各声部 MIDI，并用 region_ops 做人性化编辑。
 要求：
 - 不得修改已有的主旋律与和弦轨道内容，只能新增轨道；
@@ -265,6 +275,7 @@ STAGE_PROMPTS = {
   * 节奏律动——鼓组 backbeat（军鼓在 2/4 拍）要稳，副歌可加 fill 转折；
 - rationale 说明编曲层次与各段落乐器进出设计。""",
     Stage.MIX: """阶段：混音（mix）—— 必须覆盖前两阶段产生的所有轨道，达到出版级混音标准。
+【工程一致性】本阶段在同一个 Logic Pro 工程上操作，严禁输出 project 字段，严禁 open/close。
 为所有已有轨道设置音量、声相、均衡、压缩、发送等，并用 automation 与 plugin_params 做动态混音。
 要求：
 - 增益分级（Gain Staging）：每条轨道 gain_stage_db 设 -18~-12dBFS，headroom_db 设 -6dB，留足余量给母带；
@@ -282,6 +293,8 @@ STAGE_PROMPTS = {
 - 输出 mix 数组覆盖全部已有轨道（主旋律、和弦、鼓组、贝斯、铺底等），不得遗漏；
 - rationale 说明混音思路：频率布局、动态设计、空间感。""",
     Stage.MASTER: """阶段：母带（master）—— 整首作品的最后一步，达到商业发行响度标准。
+【工程一致性】本阶段在同一个 Logic Pro 工程上操作，严禁输出 project 字段，严禁 open/close。
+导出（bounce）在当前工程上进行，导出文件落到系统配置的 render_dir。
 在主输出施加母带链并设置导出参数，同时输出 master_spec 明确响度目标。
 要求：
 - 母带链顺序：Channel EQ（修整低频/去浑浊）→ Multiband Compressor（胶合）→
@@ -295,7 +308,7 @@ STAGE_PROMPTS = {
 - 用 plugin_params 精调母带链（Limiter Ceiling=true_peak_ceiling、Attack 5ms、Release 80ms）；
 - 用 automation 让母带链在尾奏轻微提亮（EQ 高频自动化 +1dB）；
 - bounce 导出 wav/24bit/44100Hz（或 48kHz 影视）；交付混音师可设 stems=true；
-- 可用 actions 在导出前 save 保存工程；
+- 可用 actions 在导出前 save 保存工程（系统会在流水线结束时自动保存，此处可选）；
 - rationale 里总结整首作品的制作思路、最终响度/动态目标、与商业发行的匹配度。""",
 }
 

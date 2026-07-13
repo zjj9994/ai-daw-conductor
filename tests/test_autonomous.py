@@ -59,6 +59,9 @@ def _make_commander_mock():
     commander.daw = MagicMock()
     commander.daw.log = AsyncMock()
     commander.daw.emit = AsyncMock()
+    commander.daw.save_project = AsyncMock()
+    commander.daw.current_project_path = None  # 测试不模拟实际工程文件
+    commander.daw.current_project_title = ""
 
     async def _run_stage(stage, user_prompt, context, bpm):
         return _make_result(stage)

@@ -212,8 +212,13 @@ class AutonomousPipeline:
             self.tracker.finish()
 
         if results and not self._cancel:
+            # 流水线结束前保存工程，确保所有改动落盘到同一个 .logicx 文件
+            if self.commander.daw.current_project_path:
+                await self.commander.daw.save_project()
             await self._log("info", f"✓ 自主制作完成：共 {len(results)} 阶段"
-                                    + (f"，作品「{project_title}」" if project_title else ""))
+                                    + (f"，作品「{project_title}」" if project_title else "")
+                                    + (f"，工程已保存：{self.commander.daw.current_project_path}"
+                                       if self.commander.daw.current_project_path else ""))
             await self.commander.daw.emit(
                 kind="pipeline_done",
                 stages=[r.stage.value for r in results],
@@ -473,6 +478,14 @@ class AutonomousPipeline:
     def _accumulate_context(self, context: str, result: StageResult, stage: Stage) -> str:
         """把本阶段产出追加到上下文，供下一阶段延续。"""
         parts = [context] if context else []
+        # 在作曲阶段后注入工程路径，明确告知后续阶段所有操作指向同一个工程
+        daw = self.commander.daw
+        if daw.current_project_path and "[工程]" not in (context or ""):
+            parts.insert(0, (
+                f"[工程] 当前 Logic Pro 工程：{daw.current_project_title}"
+                f"（{daw.current_project_path}）。"
+                "后续所有阶段都在这同一个工程上操作，禁止新建/打开/关闭工程。"
+            ))
         parts.append(f"\n[{stage.value}] 摘要：{result.summary}")
         if result.project:
             p = result.project

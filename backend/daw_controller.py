@@ -42,6 +42,13 @@ class DAWController:
         )
         self.use_applescript = bool(self.cfg.get("use_applescript", True))
         self._track_index: dict[str, TrackSpec] = {}
+        # 工程 lifecycle：一首音乐的所有操作都指向同一个工程文件
+        self.project_dir = Path(self.cfg.get(
+            "project_dir", "~/Music/AI-DAW-Conductor/projects"
+        )).expanduser()
+        self.project_dir.mkdir(parents=True, exist_ok=True)
+        self.current_project_path: Optional[str] = None  # .logicx 文件绝对路径
+        self.current_project_title: str = ""
 
     async def emit(self, **payload: Any):
         if self.event_cb:
@@ -60,16 +67,31 @@ class DAWController:
 
     # ============== 工程 ==============
     async def create_project(self, tempo: TempoSpec, title: str = "AI Project"):
-        await self.log("info", f"新建 Logic Pro 项目：{title}（{tempo.bpm}BPM）")
+        """新建 Logic Pro 工程，并立即另存为到 project_dir 下的 .logicx 文件。
+
+        一首音乐的所有操作（作曲/编曲/混音/母带/导出）都指向这同一个工程文件。
+        工程路径记录在 self.current_project_path，供阶段间引用与校验。
+        """
+        # 文件名安全化：去掉路径分隔符与非法字符
+        safe_title = "".join(c for c in title if c not in '/\\:*?"<>|') or "AI Project"
+        project_path = str(self.project_dir / f"{safe_title}.logicx")
+        self.current_project_path = project_path
+        self.current_project_title = title
+
+        await self.log("info", f"新建 Logic Pro 工程：{title}（{tempo.bpm}BPM）→ {project_path}")
         if self._real:
             self.applescript.new_project(name=title, bpm=tempo.bpm, key=tempo.key or "C")
             if tempo.time_signature:
                 num, den = (tempo.time_signature.split("/") + [4, 4])[:2]
                 self.applescript.set_time_signature(int(num), int(den))
+            # 立即另存为到磁盘，确保工程有确定路径，后续所有阶段都指向它
+            self.applescript.save_as(project_path)
+            await self.log("info", f"工程已保存：{project_path}")
         else:
             await self.log("warn", "非 macOS 或未启用 AppleScript，跳过实际建项目（模拟模式）。")
         await self.emit(kind="project_created", title=title, bpm=tempo.bpm,
-                        key=tempo.key, time_signature=tempo.time_signature)
+                        key=tempo.key, time_signature=tempo.time_signature,
+                        project_path=project_path)
 
     async def save_project(self):
         await self.log("info", "保存工程")
@@ -368,7 +390,13 @@ class DAWController:
 
     # ============== UI 动作 ==============
     async def ui_action(self, action: UIAction):
-        """执行 UI/工程级动作（保存/撤销/视图切换等）。"""
+        """执行 UI/工程级动作（保存/撤销/视图切换等）。
+
+        安全策略：禁止 open/close 动作——一首音乐的所有操作必须指向同一个工程，
+        AI 不得在制作过程中打开或关闭工程，否则后续阶段会操作错工程。
+        save/save_as 由系统在 create_project 时统一管理，AI 输出 save 会被接受
+        （仅发 Cmd-S 保存到已确定的路径），但 save_as 的 path 会被忽略以避免切换工程。
+        """
         labels = {
             "save": "保存", "save_as": "另存为", "open": "打开", "close": "关闭",
             "undo": "撤销", "redo": "重做", "open_piano_roll": "打开钢琴卷帘",
@@ -376,16 +404,29 @@ class DAWController:
             "zoom_fit": "缩放适配", "toggle_track": "切换轨道", "select_all": "全选",
             "collapse_all": "折叠所有堆栈",
         }
+        # 守卫：禁止切换/关闭工程，保证所有操作指向同一个工程
+        if action.op in ("open", "close"):
+            await self.log(
+                "warn",
+                f"已忽略 UI 动作「{action.op}」：制作过程中不得打开/关闭工程，"
+                "一首音乐的所有操作必须指向同一个 Logic Pro 工程。",
+            )
+            await self.emit(kind="ui_action", op=action.op, ignored=True)
+            return
+        if action.op == "save_as":
+            # 强制使用系统管理的工程路径，忽略 AI 给的 path
+            if self.current_project_path:
+                await self.log("info", f"保存工程（使用系统路径）：{self.current_project_path}")
+                if self._real:
+                    self.applescript.save_project()
+            else:
+                await self.log("warn", "save_as 被忽略：当前无活动工程。")
+            await self.emit(kind="ui_action", op="save_as", ignored=bool(not self.current_project_path))
+            return
         await self.log("info", f"UI：{labels.get(action.op, action.op)}")
         if self._real:
             if action.op == "save":
                 self.applescript.save_project()
-            elif action.op == "save_as" and action.path:
-                self.applescript.save_as(action.path)
-            elif action.op == "open" and action.path:
-                self.applescript.open_project(action.path)
-            elif action.op == "close":
-                self.applescript.close_project()
             elif action.op == "undo":
                 self.applescript.undo()
             elif action.op == "redo":

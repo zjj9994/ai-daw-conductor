@@ -33,9 +33,14 @@ def _make_daw_mock():
 
 
 def _full_stage_result() -> StageResult:
-    """构造一个包含全部新动作类型的 StageResult。"""
+    """构造一个包含全部新动作类型的 StageResult。
+
+    stage 用 COMPOSE，因为 project 字段（新建工程）只允许在作曲阶段输出；
+    其他动作类型（tempo/markers/tracks/regions/mix/master/bounce/actions）
+    在任何阶段都可执行，commander 不按 stage 过滤。
+    """
     return StageResult(
-        stage=Stage.MIX,
+        stage=Stage.COMPOSE,
         summary="全功能测试",
         project=ProjectPlan(
             title="测试曲", genre="Pop",
