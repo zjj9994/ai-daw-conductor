@@ -89,8 +89,24 @@ def test_send_key_auto_dismiss_can_be_disabled():
     bridge.dismiss_dialogs.assert_not_called()
 
 
-def test_menu_click_auto_dismiss_before_clicking():
-    """_menu_click 应在点菜单前调 dismiss_dialogs。"""
+def test_menu_click_auto_dismiss_can_be_enabled():
+    """_menu_click(auto_dismiss=True) 时应在点菜单前调 dismiss_dialogs。
+
+    注意：auto_dismiss 默认是 False（避免误关刚打开的功能对话框），
+    需要显式传 auto_dismiss=True 才会前置 dismiss。
+    """
+    bridge = AppleScriptBridge.__new__(AppleScriptBridge)
+    bridge.app_name = "Logic Pro"
+    bridge.render_dir = MagicMock()
+    bridge._available = False
+    bridge._run = MagicMock(return_value="")
+    bridge.dismiss_dialogs = MagicMock(return_value=0)
+    bridge._menu_click(["File", "Save"], delay=0.1, auto_dismiss=True)
+    bridge.dismiss_dialogs.assert_called_once_with(action="cancel", max_count=3)
+
+
+def test_menu_click_default_does_not_auto_dismiss():
+    """_menu_click 默认不 dismiss（auto_dismiss=False），保护刚打开的功能对话框。"""
     bridge = AppleScriptBridge.__new__(AppleScriptBridge)
     bridge.app_name = "Logic Pro"
     bridge.render_dir = MagicMock()
@@ -98,7 +114,7 @@ def test_menu_click_auto_dismiss_before_clicking():
     bridge._run = MagicMock(return_value="")
     bridge.dismiss_dialogs = MagicMock(return_value=0)
     bridge._menu_click(["File", "Save"], delay=0.1)
-    bridge.dismiss_dialogs.assert_called_once_with(action="cancel", max_count=3)
+    bridge.dismiss_dialogs.assert_not_called()
 
 
 # ---------- activate 启动时清场 ----------

@@ -238,6 +238,13 @@ async def get_settings():
 
 @app.post("/api/settings")
 async def update_settings(s: SettingsIn):
+    # 守卫：任务运行中禁止重建引擎，否则会换掉正在用的 daw/commander/ai 对象，
+    # 导致正在跑的 AppleScript 命令失去引用、MIDI 端口被关、事件流错乱。
+    if _current_task and not _current_task.done():
+        return JSONResponse(
+            {"ok": False, "error": "有任务正在运行，无法更新设置。请先取消当前任务再重试。"},
+            status_code=409,
+        )
     cfg = load_config()
     ai = cfg.setdefault("ai", {})
     browser = cfg.setdefault("browser", {})
@@ -302,6 +309,12 @@ async def api_provider_switch(s: ProviderSwitchIn):
     用于顶栏快捷切换芯片：用户点击某个 AI 卡片即立即切换，
     无需打开完整设置弹层。
     """
+    # 守卫：任务运行中禁止重建引擎（同 update_settings）
+    if _current_task and not _current_task.done():
+        return JSONResponse(
+            {"ok": False, "error": "有任务正在运行，无法切换 provider。请先取消当前任务再重试。"},
+            status_code=409,
+        )
     if s.provider not in PROVIDER_CATALOG:
         return JSONResponse(
             {"ok": False, "error": f"未知 provider：{s.provider}"},

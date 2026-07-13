@@ -30,51 +30,52 @@ from .config_loader import is_macos
 
 
 # Logic Pro 常用键命令编号（用于 System Events 的 key code / keystroke）
-# 这些是 Logic Pro 默认键命令；若用户自定义过，可在配置里覆盖。
+# 这些是 Logic Pro X 默认键命令；若用户自定义过，可在配置里覆盖。
+# 注意：Logic Pro 的修饰键语法是 {command down, option down} 等，每个都要带 down。
 KEY_COMMANDS = {
     "play": "key code 49",           # Space
     "stop": "key code 49",           # Space（再按一次停止）
-    "record": "key code 13",         # R
+    "record": "key code 13",         # R（Logic 默认 R 录音）
     "pause": "key code 49",          # Space
     "goto_start": "key code 115",    # Home（回到开头）
     "goto_end": "key code 119",      # End
     "rewind": "key code 123",        # 左箭头
     "forward": "key code 124",       # 右箭头
-    "toggle_loop": 'keystroke "l" using {command down}',  # Cmd-L 循环模式
-    "toggle_metronome": 'keystroke "k" using {command down}',  # Cmd-K
-    "new_track": 'keystroke "n" using {option, command down}',
-    "new_project": 'keystroke "n" using {command down}',
+    "toggle_loop": "key code 8",     # C（Logic 默认 C 切换 Cycle/循环区域，Cmd-L 是 Loop Browser！）
+    "toggle_metronome": 'keystroke "p" using {control down}',  # Ctrl-P 节拍器（Cmd-K 是 Key Commands 编辑器！）
+    "new_track": 'keystroke "n" using {option down, command down}',  # Opt-Cmd-N 新建轨道
+    "new_project": 'keystroke "n" using {shift down, control down, option down, command down}',  # Shift-Ctrl-Opt-Cmd-N 新建工程（避免与 new_track 冲突）
     "save": 'keystroke "s" using {command down}',
-    "save_as": 'keystroke "s" using {shift, command down}',
+    "save_as": 'keystroke "s" using {shift down, command down}',
     "open": 'keystroke "o" using {command down}',
     "close": 'keystroke "w" using {command down}',
     "undo": 'keystroke "z" using {command down}',
-    "redo": 'keystroke "z" using {shift, command down}',
+    "redo": 'keystroke "z" using {shift down, command down}',
     "split_at_playhead": 'keystroke "\\" using {command down}',  # Cmd-\ 切割
-    "join_regions": 'keystroke "j" using {command, option, shift down}',  # 合并
+    "join_regions": 'keystroke "j" using {command down}',  # Cmd-J 合并（不是 Cmd-Opt-Shift-J）
     "delete_regions": "key code 51",  # Delete
     "duplicate": 'keystroke "d" using {command down}',  # Cmd-D 重复
     "copy": 'keystroke "c" using {command down}',
     "paste": 'keystroke "v" using {command down}',
     "cut": 'keystroke "x" using {command down}',
     "select_all": 'keystroke "a" using {command down}',
-    "quantize": 'keystroke "q" using {command down}',  # Cmd-Q 量化（注意：与退出冲突，Logic 里是 Q）
-    "quantize_strong": 'keystroke "q" using {command, option down}',
-    "transpose_up": 'keystroke "]" using {command, option down}',  # 升半音
-    "transpose_down": 'keystroke "[" using {command, option down}',  # 降半音
-    "octave_up": 'keystroke "]" using {command, option, shift down}',
-    "octave_down": 'keystroke "[" using {command, option, shift down}',
-    "open_piano_roll": 'keystroke "p" using {command down}',  # Cmd-P 钢琴卷帘（注意：与播放冲突，Logic 用 6）
-    "open_mixer": 'keystroke "x" using {command down}',  # Cmd-X 混音器
-    "open_inspector": 'keystroke "i" using {command down}',  # Cmd-I
-    "zoom_fit": 'keystroke "z" using {control, option, command down}',
+    "quantize": 'keystroke "q" using {command down}',  # Q 量化（Logic 里 Q 是量化，Cmd-Q 才是退出）
+    "quantize_strong": 'keystroke "q" using {command down, option down}',
+    "transpose_up": 'keystroke "]" using {command down, option down}',  # 升半音
+    "transpose_down": 'keystroke "[" using {command down, option down}',  # 降半音
+    "octave_up": 'keystroke "]" using {command down, option down, shift down}',
+    "octave_down": 'keystroke "[" using {command down, option down, shift down}',
+    "open_piano_roll": "key code 22",  # 数字键 6（Logic 默认用 6 打开钢琴卷帘，不是 Cmd-P）
+    "open_mixer": 'keystroke "x"',  # X（无修饰！Cmd-X 是剪切，会删片段！）
+    "open_inspector": 'keystroke "i"',  # I（无修饰！Cmd-I 是 Import）
+    "zoom_fit": 'keystroke "z" using {control down, option down, command down}',
     "freeze_track": 'keystroke "f" using {control down}',
-    "toggle_track_hide": 'keystroke "h" using {control, shift down}',
-    "arm_track": 'keystroke "r" using {control down}',
-    "mute_track": 'keystroke "m" using {control down}',
-    "solo_track": 'keystroke "s" using {control down}',
-    "create_track_stack": 'keystroke "f" using {shift, command down}',
-    "collapse_all": 'keystroke "c" using {control, option, command down}',
+    "toggle_track_hide": 'keystroke "h" using {control down}',  # Ctrl-H（不是 Ctrl-Shift-H）
+    "arm_track": 'keystroke "r" using {control down}',  # Ctrl-R arm
+    "mute_track": 'keystroke "m" using {control down}',  # Ctrl-M mute（Logic 里 M 也能 mute 选中轨道）
+    "solo_track": 'keystroke "s" using {control down}',  # Ctrl-S solo（Logic 里 S 也能 solo）
+    "create_track_stack": "",  # 无默认快捷键，走菜单 Track > Create Track Stack...
+    "collapse_all": 'keystroke "c" using {control down, option down, command down}',
     "new_marker": 'keystroke "\\"" using {option down}',  # Option-" 创建标记
 }
 
@@ -105,6 +106,7 @@ class AppleScriptBridge:
     async def _run_async(self, script: str, timeout: int = 60) -> str:
         if not self._available:
             return ""
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 "osascript", "-e", script,
@@ -112,7 +114,25 @@ class AppleScriptBridge:
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             return stdout.decode().strip()
-        except (asyncio.TimeoutError, Exception):
+        except asyncio.TimeoutError:
+            # 超时时显式 kill 子进程，避免僵尸 osascript 继续在后台跑
+            if proc:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+            return ""
+        except asyncio.CancelledError:
+            # 取消时也要 kill 子进程
+            if proc:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+            raise
+        except Exception:
             return ""
 
     # ---------- 弹窗处理 ----------
@@ -224,11 +244,12 @@ class AppleScriptBridge:
                 break
         return closed
 
-    def _send_key(self, key_expr: str, delay: float = 0.3, auto_dismiss: bool = True):
+    def _send_key(self, key_expr: str, delay: float = 0.3, auto_dismiss: bool = False):
         """通过 System Events 给 Logic Pro 发送键命令。
 
-        auto_dismiss=True 时，发键前先 dismiss 残留弹窗（保守 cancel 模式），
-        防止键命令落到弹窗按钮上导致后续操作错乱。
+        auto_dismiss 默认 False——因为很多操作是多步序列（如 new_track→return），
+        第二步 return 之前不能 dismiss，否则会把刚打开的 New Tracks 对话框关掉。
+        只在明确的「入口」（activate、save_as 前、bounce 前）才显式调 dismiss。
         """
         if auto_dismiss:
             self.dismiss_dialogs(action="cancel", max_count=3)
@@ -242,17 +263,42 @@ class AppleScriptBridge:
             f'end tell'
         )
 
-    def _menu_click(self, menu_path: list[str], delay: float = 0.3, auto_dismiss: bool = True):
-        """点击菜单项，menu_path 如 ['File', 'Save As...']。"""
+    def _menu_click(self, menu_path: list[str], delay: float = 0.3, auto_dismiss: bool = False):
+        """点击菜单项，menu_path 如 ['File', 'Save As...']。
+
+        auto_dismiss 默认 False，原因同 _send_key。
+        """
         if auto_dismiss:
             self.dismiss_dialogs(action="cancel", max_count=3)
-        items = ", ".join(f'menu item "{m}"' for m in menu_path[1:])
+        # 递归构造菜单路径，支持任意层级（File > Export > All Tracks as Audio Files…）
+        # 从最内层往外拼：click menu item "X" of menu 1 of menu item "Y" of menu 1 of menu bar item "Z"
+        # menu_path = [menu_bar_item, level1, level2, ..., leaf]
+        if len(menu_path) < 2:
+            return
+        path_expr = f'menu bar item "{menu_path[0]}" of menu bar 1'
+        for item in menu_path[1:-1]:
+            path_expr = f'menu item "{item}" of menu 1 of {path_expr}'
+        leaf = menu_path[-1]
+        # 省略号兼容：Logic Pro 用 Unicode …，但用户/AI 可能传 ASCII ...
+        # AppleScript 精确匹配字符串，这里尝试精确名 + 模糊匹配（包含 leaf 去掉省略号后的关键词）
+        leaf_plain = leaf.rstrip('.').rstrip('…').strip()
         script = (
             f'tell application "System Events"\n'
             f'  tell process "{self.app_name}"\n'
             f'    set frontmost to true\n'
-            f'    click menu item "{menu_path[-1]}" of menu 1 of menu item "{menu_path[-2]}" '
-            f'of menu 1 of menu bar item "{menu_path[0]}" of menu bar 1\n'
+            f'    try\n'
+            f'      click menu item "{leaf}" of menu 1 of {path_expr}\n'
+            f'    on error\n'
+            f'      -- 兜底：遍历菜单项找包含关键词的（兼容 …/... 和本地化文案）\n'
+            f'      set targetMenu to menu 1 of {path_expr}\n'
+            f'      repeat with mi in menu items of targetMenu\n'
+            f'        set miName to name of mi\n'
+            f'        if miName contains "{leaf_plain}" then\n'
+            f'          click mi\n'
+            f'          exit repeat\n'
+            f'        end if\n'
+            f'      end repeat\n'
+            f'    end try\n'
             f'    delay {delay}\n'
             f'  end tell\n'
             f'end tell'
@@ -280,13 +326,31 @@ class AppleScriptBridge:
         self.set_tempo(bpm)
 
     def set_tempo(self, bpm: float):
-        """设置项目速度。打开速度操作并输入值。"""
+        """设置项目速度。
+
+        优先用 AppleScript 字典直接设 tempo（最可靠），失败则走菜单
+        Edit > Tempo > Set Tempo... 打开对话框输入。
+        """
+        # 方案1：直接用 AppleScript 字典（Logic Pro X 支持 set tempo）
+        out = self._run(
+            f'tell application "{self.app_name}"\n'
+            f'  try\n'
+            f'    set tempo to {bpm}\n'
+            f'    return "ok"\n'
+            f'  on error\n'
+            f'    return "fallback"\n'
+            f'  end try\n'
+            f'end tell'
+        )
+        if out.strip() == "ok":
+            return
+        # 方案2：走菜单 Edit > Tempo > Set Tempo...
+        self._menu_click(["Edit", "Tempo", "Set Tempo..."], delay=0.4)
         self._run(
             f'tell application "System Events"\n'
             f'  tell process "{self.app_name}"\n'
             f'    set frontmost to true\n'
-            f'    keystroke "t" using {{option, command}}\n'
-            f'    delay 0.3\n'
+            f'    delay 0.2\n'
             f'    keystroke "{bpm}"\n'
             f'    delay 0.1\n'
             f'    keystroke return\n'
@@ -295,17 +359,15 @@ class AppleScriptBridge:
         )
 
     def set_time_signature(self, numerator: int = 4, denominator: int = 4):
-        """设置拍号。"""
+        """设置拍号。
+
+        用 AppleScript 字典直接设 time signature（Logic Pro X 支持）。
+        """
         self._run(
-            f'tell application "System Events"\n'
-            f'  tell process "{self.app_name}"\n'
-            f'    set frontmost to true\n'
-            f'    keystroke "\\" using {{control, option, command}}\n'  # 打开拍号
-            f'    delay 0.3\n'
-            f'    keystroke "{numerator}/{denominator}"\n'
-            f'    delay 0.1\n'
-            f'    keystroke return\n'
-            f'  end tell\n'
+            f'tell application "{self.app_name}"\n'
+            f'  try\n'
+            f'    set time signature of tempo track to {numerator}/{denominator}\n'
+            f'  end try\n'
             f'end tell'
         )
 
@@ -386,13 +448,31 @@ class AppleScriptBridge:
         self._send_key(KEY_COMMANDS["forward"], delay=0.2)
 
     def goto_bar(self, bar: int, beat: float = 1):
-        """定位播放头到指定小节拍。通过位置显示输入。"""
+        """定位播放头到指定小节拍。
+
+        优先用 AppleScript 字典直接 set playhead（最可靠），失败则走菜单
+        Edit > Go To > Position... 打开定位对话框输入 "bar beat"。
+        """
+        # 方案1：AppleScript 字典直接定位（Logic Pro X 支持）
+        out = self._run(
+            f'tell application "{self.app_name}"\n'
+            f'  try\n'
+            f'    set playhead to {bar} {beat}\n'
+            f'    return "ok"\n'
+            f'  on error\n'
+            f'    return "fallback"\n'
+            f'  end try\n'
+            f'end tell'
+        )
+        if out.strip() == "ok":
+            return
+        # 方案2：走菜单 Edit > Go To > Position...
+        self._menu_click(["Edit", "Go To", "Position..."], delay=0.4)
         self._run(
             f'tell application "System Events"\n'
             f'  tell process "{self.app_name}"\n'
             f'    set frontmost to true\n'
-            f'    keystroke "/" using {{control, option, command}}\n'  # 打开定位对话框
-            f'    delay 0.3\n'
+            f'    delay 0.2\n'
             f'    keystroke "{bar} {beat}"\n'
             f'    delay 0.1\n'
             f'    keystroke return\n'
@@ -404,13 +484,33 @@ class AppleScriptBridge:
         self._send_key(KEY_COMMANDS["toggle_loop"], delay=0.2)
 
     def set_cycle(self, start_bar: int, end_bar: int):
-        """设置循环区域。先定位到起点设左定位点，再定位到终点设右定位点。"""
+        """设置循环区域。
+
+        优先用 AppleScript 字典设 cycle mode + left/right locator（最可靠），
+        失败则走菜单和键命令兜底。
+        """
+        # 方案1：AppleScript 字典直接设左右定位点
+        out = self._run(
+            f'tell application "{self.app_name}"\n'
+            f'  try\n'
+            f'    set left locator to {start_bar} 1\n'
+            f'    set right locator to {end_bar} 1\n'
+            f'    set cycle mode to true\n'
+            f'    return "ok"\n'
+            f'  on error\n'
+            f'    return "fallback"\n'
+            f'  end try\n'
+            f'end tell'
+        )
+        if out.strip() == "ok":
+            return
+        # 方案2：定位到起点，键命令设左定位点；定位到终点，设右定位点
         self.goto_bar(start_bar)
         self._run(
             f'tell application "System Events"\n'
             f'  tell process "{self.app_name}"\n'
             f'    set frontmost to true\n'
-            f'    keystroke "l" using {{control, command}}\n'  # 设置左定位点
+            f'    keystroke "[" using {{control, command}}\n'  # Ctrl-Cmd-[ 设左定位点（Logic 默认）
             f'    delay 0.2\n'
             f'  end tell\n'
             f'end tell'

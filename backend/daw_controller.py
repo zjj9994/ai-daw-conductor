@@ -64,6 +64,31 @@ class DAWController:
     async def log(self, level: str, message: str):
         await self.emit(kind="log", level=level, message=message)
 
+    async def _call_applescript(self, method_name: str, *args, **kwargs):
+        """把同步的 applescript 方法调用移到线程池执行，避免阻塞 asyncio 事件循环。
+
+        applescript_bridge 的所有方法都用 subprocess.run（同步阻塞），如果直接在
+        async def 里调用，会让整个事件循环停转——WebSocket 收不到消息、截图任务
+        无法调度、cancel 信号传不进来。这里用 asyncio.to_thread 把同步调用移到
+        线程池，让事件循环保持响应。
+
+        错误透传：applescript_bridge._run 把所有失败静默成空字符串，调用方无法
+        区分成功/失败。这里捕获异常并 emit daw_error 事件，让 AI/前端能看到失败
+        并自我纠正。注意：_run 返回空字符串不一定是错误（命令成功但无输出），
+        所以只在抛异常时 emit error，空字符串仍返回。
+        """
+        if not self._real:
+            return None
+        method = getattr(self.applescript, method_name)
+        try:
+            return await asyncio.to_thread(method, *args, **kwargs)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            await self.log("error", f"AppleScript 调用失败 {method_name}({args}, {kwargs}): {e}")
+            await self.emit(kind="daw_error", method=method_name, error=str(e))
+            return None
+
     @property
     def _real(self) -> bool:
         """是否真正驱动 Logic Pro（而非模拟）。"""
@@ -122,12 +147,12 @@ class DAWController:
 
         await self.log("info", f"新建 Logic Pro 工程：{title}（{tempo.bpm}BPM）→ {project_path}（已锁定）")
         if self._real:
-            self.applescript.new_project(name=title, bpm=tempo.bpm, key=tempo.key or "C")
+            await self._call_applescript("new_project", name=title, bpm=tempo.bpm, key=tempo.key or "C")
             if tempo.time_signature:
                 num, den = (tempo.time_signature.split("/") + [4, 4])[:2]
-                self.applescript.set_time_signature(int(num), int(den))
+                await self._call_applescript("set_time_signature", int(num), int(den))
             # 立即另存为到磁盘，确保工程有确定路径，后续所有阶段都指向它
-            self.applescript.save_as(project_path)
+            await self._call_applescript("save_as", project_path)
             await self.log("info", f"工程已保存并锁定：{project_path}")
         else:
             await self.log("warn", "非 macOS 或未启用 AppleScript，跳过实际建项目（模拟模式，工程锁仍生效）。")
@@ -156,7 +181,7 @@ class DAWController:
             return False
         await self.log("info", f"打开已有工程：{title}（{path}，已锁定）")
         if self._real:
-            self.applescript.open_project(str(p))
+            await self._call_applescript("open_project", str(p))
         await self.emit(kind="project_opened", title=title, project_path=str(p), locked=True)
         return True
 
@@ -166,25 +191,25 @@ class DAWController:
             return
         await self.log("info", "保存工程")
         if self._real:
-            self.applescript.save_project()
+            await self._call_applescript("save_project")
         await self.emit(kind="project_saved")
 
     async def save_as(self, path: str):
         await self.log("info", f"另存为：{path}")
         if self._real:
-            self.applescript.save_as(path)
+            await self._call_applescript("save_as", path)
         await self.emit(kind="project_saved_as", path=path)
 
     async def undo(self):
         await self.log("info", "撤销")
         if self._real:
-            self.applescript.undo()
+            await self._call_applescript("undo")
         await self.emit(kind="undo")
 
     async def redo(self):
         await self.log("info", "重做")
         if self._real:
-            self.applescript.redo()
+            await self._call_applescript("redo")
         await self.emit(kind="redo")
 
     # ============== 传输 ==============
@@ -199,24 +224,24 @@ class DAWController:
         await self.log("info", f"传输：{labels.get(op, op)}")
         if self._real:
             if op == "play":
-                self.applescript.play()
+                await self._call_applescript("play")
             elif op == "stop":
-                self.applescript.stop()
+                await self._call_applescript("stop")
             elif op == "pause":
-                self.applescript.pause()
+                await self._call_applescript("pause")
             elif op == "record":
-                self.applescript.record()
+                await self._call_applescript("record")
             elif op == "goto":
-                self.applescript.goto_bar(action.bar or 1, action.beat or 1)
+                await self._call_applescript("goto_bar", action.bar or 1, action.beat or 1)
             elif op == "set_cycle" or op == "set_loop":
                 if action.start_bar and action.end_bar:
-                    self.applescript.set_cycle(action.start_bar, action.end_bar)
+                    await self._call_applescript("set_cycle", action.start_bar, action.end_bar)
             elif op == "toggle_loop":
-                self.applescript.toggle_loop()
+                await self._call_applescript("toggle_loop")
             elif op == "rewind":
-                self.applescript.rewind()
+                await self._call_applescript("rewind")
             elif op == "forward":
-                self.applescript.forward()
+                await self._call_applescript("forward")
         await self.emit(kind="transport", op=op, bar=action.bar,
                         start_bar=action.start_bar, end_bar=action.end_bar)
 
@@ -231,42 +256,42 @@ class DAWController:
         await self.log("info", f"创建轨道：{track.name}（{track.type} / {track.instrument or '-'}）")
         if self._real:
             if track.type == "audio":
-                self.applescript.create_audio_track(track.name)
+                await self._call_applescript("create_audio_track", track.name)
             elif track.type == "drummer":
-                self.applescript.create_drummer_track(track.name)
+                await self._call_applescript("create_drummer_track", track.name)
             elif track.type == "aux":
-                self.applescript.create_aux_track(track.name)
+                await self._call_applescript("create_aux_track", track.name)
             else:
-                self.applescript.create_software_track(track.name)
+                await self._call_applescript("create_software_track", track.name)
             if track.color is not None:
-                self.applescript.set_track_color(track.name, track.color)
+                await self._call_applescript("set_track_color", track.name, track.color)
             if track.icon:
-                self.applescript.set_track_icon(track.name, track.icon)
+                await self._call_applescript("set_track_icon", track.name, track.icon)
             if track.freeze:
-                self.applescript.freeze_track(track.name)
+                await self._call_applescript("freeze_track", track.name)
             if track.hidden:
-                self.applescript.toggle_track_hide(track.name)
+                await self._call_applescript("toggle_track_hide", track.name)
         await self.emit(kind="track_added", track=track.model_dump())
 
     async def delete_track(self, name: str):
         await self.log("info", f"删除轨道：{name}")
         self._track_index.pop(name, None)
         if self._real:
-            self.applescript.select_track_by_name(name)
-            self.applescript.delete_selected_track()
+            await self._call_applescript("select_track_by_name", name)
+            await self._call_applescript("delete_selected_track")
         await self.emit(kind="track_deleted", track=name)
 
     async def duplicate_track(self, name: str):
         await self.log("info", f"复制轨道：{name}")
         if self._real:
-            self.applescript.select_track_by_name(name)
-            self.applescript.duplicate_selected_track()
+            await self._call_applescript("select_track_by_name", name)
+            await self._call_applescript("duplicate_selected_track")
         await self.emit(kind="track_duplicated", track=name)
 
     async def create_track_stack(self, stack: TrackStackSpec):
         await self.log("info", f"创建轨道堆栈「{stack.name}」：{stack.members}")
         if self._real:
-            self.applescript.create_track_stack(stack.members, stack.name, stack.stack_type)
+            await self._call_applescript("create_track_stack", stack.members, stack.name, stack.stack_type)
         await self.emit(kind="track_stack_created", name=stack.name, members=stack.members)
 
     # ============== MIDI 区域 ==============
@@ -305,25 +330,25 @@ class DAWController:
         await self.log("info", f"片段操作：{detail}")
         if self._real and op.track:
             if op.op == "split":
-                self.applescript.split_region_at_playhead(op.track, op.at_bar or 1, op.at_beat or 1)
+                await self._call_applescript("split_region_at_playhead", op.track, op.at_bar or 1, op.at_beat or 1)
             elif op.op == "join":
-                self.applescript.join_regions(op.track)
+                await self._call_applescript("join_regions", op.track)
             elif op.op == "move":
-                self.applescript.move_region(op.track, op.at_bar or 1, op.to_bar or 1)
+                await self._call_applescript("move_region", op.track, op.at_bar or 1, op.to_bar or 1)
             elif op.op == "copy":
-                self.applescript.copy_region(op.track, op.at_bar or 1, op.to_bar or 1)
+                await self._call_applescript("copy_region", op.track, op.at_bar or 1, op.to_bar or 1)
             elif op.op == "delete":
-                self.applescript.delete_regions(op.track, op.at_bar or 1)
+                await self._call_applescript("delete_regions", op.track, op.at_bar or 1)
             elif op.op == "loop":
-                self.applescript.loop_region(op.track, op.at_bar or 1, op.loop_count or 2)
+                await self._call_applescript("loop_region", op.track, op.at_bar or 1, op.loop_count or 2)
             elif op.op == "resize":
-                self.applescript.resize_region(op.track, op.at_bar or 1, op.new_length_beats or 4)
+                await self._call_applescript("resize_region", op.track, op.at_bar or 1, op.new_length_beats or 4)
             elif op.op == "quantize":
-                self.applescript.select_track_by_name(op.track)
-                self.applescript.quantize_selected_regions(op.grid or "1/16", op.strength or 100)
+                await self._call_applescript("select_track_by_name", op.track)
+                await self._call_applescript("quantize_selected_regions", op.grid or "1/16", op.strength or 100)
             elif op.op == "transpose":
-                self.applescript.select_track_by_name(op.track)
-                self.applescript.transpose_selected(op.semitones or 0)
+                await self._call_applescript("select_track_by_name", op.track)
+                await self._call_applescript("transpose_selected", op.semitones or 0)
         await self.emit(kind="region_op", op=op.op, track=op.track,
                         at_bar=op.at_bar, to_bar=op.to_bar)
 
@@ -335,25 +360,25 @@ class DAWController:
         await self.log("info", f"混音：{params.track}（vol={params.volume_db} pan={params.pan}）")
         if self._real:
             if params.volume_db is not None:
-                self.applescript.set_volume(params.track, params.volume_db)
+                await self._call_applescript("set_volume", params.track, params.volume_db)
             if params.pan is not None:
-                self.applescript.set_pan(params.track, params.pan)
+                await self._call_applescript("set_pan", params.track, params.pan)
             if params.mute is not None:
-                self.applescript.set_mute(params.track, params.mute)
+                await self._call_applescript("set_mute", params.track, params.mute)
             if params.solo is not None:
-                self.applescript.set_solo(params.track, params.solo)
+                await self._call_applescript("set_solo", params.track, params.solo)
             if params.input_monitoring is not None:
-                self.applescript.set_input_monitoring(params.track, params.input_monitoring)
+                await self._call_applescript("set_input_monitoring", params.track, params.input_monitoring)
             if params.plugins:
-                self.applescript.select_track_by_name(params.track)
+                await self._call_applescript("select_track_by_name", params.track)
                 for p in params.plugins:
                     if p.bypass:
-                        self.applescript.bypass_plugin(params.track, p.name, True)
+                        await self._call_applescript("bypass_plugin", params.track, p.name, True)
                     else:
-                        self.applescript.add_plugin_to_selected_track(p.name, p.preset)
+                        await self._call_applescript("add_plugin_to_selected_track", p.name, p.preset)
             if params.sends:
                 for s in params.sends:
-                    self.applescript.add_send_to_bus(params.track, s.target, s.amount)
+                    await self._call_applescript("add_send_to_bus", params.track, s.target, s.amount)
         else:
             await self.log("warn", "模拟模式：跳过混音器实际操作。")
         await self.emit(kind="mix_applied", track=params.track,
@@ -366,10 +391,10 @@ class DAWController:
             return
         await self.log("info", f"创建总线「{bus.name}」（输入={bus.input or '-'}，{len(bus.plugins)} 个插件）")
         if self._real:
-            self.applescript.create_aux_channel(bus.name, bus.input)
+            await self._call_applescript("create_aux_channel", bus.name, bus.input)
             for p in bus.plugins:
-                self.applescript.select_track_by_name(bus.name)
-                self.applescript.add_plugin_to_selected_track(p.name, p.preset)
+                await self._call_applescript("select_track_by_name", bus.name)
+                await self._call_applescript("add_plugin_to_selected_track", p.name, p.preset)
         await self.emit(kind="bus_created", name=bus.name, input=bus.input,
                         plugins=[p.name for p in bus.plugins])
 
@@ -377,7 +402,7 @@ class DAWController:
         """设置插件参数。"""
         await self.log("info", f"插件参数：{p.track}/{p.plugin}/{p.parameter} = {p.value}")
         if self._real:
-            self.applescript.set_plugin_parameter(p.track, p.plugin, p.parameter, p.value)
+            await self._call_applescript("set_plugin_parameter", p.track, p.plugin, p.parameter, p.value)
         await self.emit(kind="plugin_param", track=p.track, plugin=p.plugin,
                         parameter=p.parameter, value=p.value)
 
@@ -386,8 +411,8 @@ class DAWController:
         """写自动化曲线。"""
         await self.log("info", f"自动化：{auto.track}/{auto.parameter}（{len(auto.points)} 个点，模式={auto.mode}）")
         if self._real:
-            self.applescript.set_automation_mode(auto.track, auto.mode)
-            self.applescript.show_automation_for_track(auto.track, auto.parameter)
+            await self._call_applescript("set_automation_mode", auto.track, auto.mode)
+            await self._call_applescript("show_automation_for_track", auto.track, auto.parameter)
         await self.emit(kind="automation", track=auto.track, parameter=auto.parameter,
                         mode=auto.mode, point_count=len(auto.points))
 
@@ -396,7 +421,7 @@ class DAWController:
         """添加编排标记。"""
         await self.log("info", f"标记：{marker.name} @ 小节 {marker.bar}")
         if self._real:
-            self.applescript.add_arrangement_marker(marker.name, marker.bar)
+            await self._call_applescript("add_arrangement_marker", marker.name, marker.bar)
         await self.emit(kind="marker_added", name=marker.name, bar=marker.bar)
 
     # ============== 速度变化 ==============
@@ -405,7 +430,7 @@ class DAWController:
         ramp_desc = "（渐变）" if tc.ramp else "（跳变）"
         await self.log("info", f"速度变化：{tc.bpm}BPM @ 小节 {tc.bar}{ramp_desc}")
         if self._real:
-            self.applescript.add_tempo_change(tc.bar, tc.bpm, tc.ramp)
+            await self._call_applescript("add_tempo_change", tc.bar, tc.bpm, tc.ramp)
         await self.emit(kind="tempo_change", bar=tc.bar, bpm=tc.bpm, ramp=tc.ramp)
 
     # ============== 母带 ==============
@@ -415,12 +440,12 @@ class DAWController:
             return
         await self.log("info", f"母带链：{[p.name for p in plugins]}")
         if self._real:
-            self.applescript.select_master_track()
+            await self._call_applescript("select_master_track")
             for p in plugins:
                 if p.bypass:
-                    self.applescript.bypass_plugin("Stereo Out", p.name, True)
+                    await self._call_applescript("bypass_plugin", "Stereo Out", p.name, True)
                 else:
-                    self.applescript.add_plugin_to_master(p.name, p.preset)
+                    await self._call_applescript("add_plugin_to_master", p.name, p.preset)
         await self.emit(kind="master_applied", plugins=[p.model_dump() for p in plugins])
 
     # ============== 录音 ==============
@@ -429,12 +454,12 @@ class DAWController:
         await self.log("info", f"录音准备：{rec.track}（armed={rec.armed}，count_in={rec.count_in}）")
         if self._real:
             if rec.count_in:
-                self.applescript.set_count_in(rec.count_in)
+                await self._call_applescript("set_count_in", rec.count_in)
             if rec.autopunch:
-                self.applescript.set_autopunch(rec.autopunch.get("start_bar", 1),
-                                                rec.autopunch.get("end_bar", 2))
+                await self._call_applescript("set_autopunch", rec.autopunch.get("start_bar", 1),
+                                             rec.autopunch.get("end_bar", 2))
             if rec.armed:
-                self.applescript.arm_track(rec.track, True)
+                await self._call_applescript("arm_track", rec.track, True)
         await self.emit(kind="record_setup", track=rec.track, armed=rec.armed,
                         count_in=rec.count_in)
 
@@ -509,7 +534,7 @@ class DAWController:
             if self.current_project_path:
                 await self.log("info", f"保存工程（使用系统路径）：{self.current_project_path}")
                 if self._real:
-                    self.applescript.save_project()
+                    await self._call_applescript("save_project")
             else:
                 await self.log("warn", "save_as 被忽略：当前无活动工程。")
             await self.emit(kind="ui_action", op="save_as", ignored=bool(not self.current_project_path))
@@ -517,29 +542,29 @@ class DAWController:
         await self.log("info", f"UI：{labels.get(action.op, action.op)}")
         if self._real:
             if action.op == "save":
-                self.applescript.save_project()
+                await self._call_applescript("save_project")
             elif action.op == "undo":
-                self.applescript.undo()
+                await self._call_applescript("undo")
             elif action.op == "redo":
-                self.applescript.redo()
+                await self._call_applescript("redo")
             elif action.op == "open_piano_roll":
-                self.applescript.open_piano_roll()
+                await self._call_applescript("open_piano_roll")
             elif action.op == "open_mixer":
-                self.applescript.open_mixer()
+                await self._call_applescript("open_mixer")
             elif action.op == "open_inspector":
-                self.applescript.open_inspector()
+                await self._call_applescript("open_inspector")
             elif action.op == "zoom_fit":
-                self.applescript.zoom_fit()
+                await self._call_applescript("zoom_fit")
             elif action.op == "select_all":
-                self.applescript.select_all_regions()
+                await self._call_applescript("select_all_regions")
             elif action.op == "collapse_all":
-                self.applescript.collapse_all_track_stacks()
+                await self._call_applescript("collapse_all_track_stacks")
             elif action.op == "dismiss_dialog":
                 # AI 主动清弹窗（截图看到弹窗时输出此动作）
-                closed = self.applescript.dismiss_dialogs(action="cancel", max_count=5)
+                closed = await self._call_applescript("dismiss_dialogs", action="cancel", max_count=5)
                 await self.log("info", f"关闭弹窗：{closed} 个")
             elif action.op == "toggle_track" and action.track:
-                self.applescript.toggle_track_hide(action.track)
+                await self._call_applescript("toggle_track_hide", action.track)
         await self.emit(kind="ui_action", op=action.op)
 
     def dismiss_dialogs(self, action: str = "cancel", max_count: int = 5) -> int:
