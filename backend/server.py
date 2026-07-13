@@ -4,8 +4,10 @@
   GET  /                  -> 前端页面
   GET  /api/health        -> 健康检查
   GET  /api/diagnostics   -> 各子系统诊断（playwright/chrome/midi/applescript）
+  GET  /api/providers     -> 可用网页 AI 目录（13+ 个，含名称/网址/徽章/厂商）
   GET  /api/settings      -> 读取当前配置（网页 AI + 浏览器连接）
   POST /api/settings      -> 更新配置（provider/web_url/browser.*）
+  POST /api/provider/switch -> 一键切换网页 AI（仅 provider + 默认网址）
   POST /api/stage         -> 单阶段执行（compose/arrange/mix/master）
   POST /api/pipeline      -> 完整四阶段流水线
   GET  /api/task/status   -> 当前任务状态与进度（供轮询）
@@ -30,7 +32,7 @@ from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .ai_engine import AIEngine
+from .ai_engine import AIEngine, PROVIDER_CATALOG, list_providers, get_provider_meta
 from .autonomous import AutonomousPipeline
 from .commander import Commander
 from .config_loader import load_config, validate_config
@@ -152,8 +154,11 @@ async def get_settings():
     ai = _state.get("cfg", {}).get("ai", {})
     browser = _state.get("cfg", {}).get("browser", {})
     engine = _state.get("ai")
+    provider = ai.get("provider", "doubao")
+    meta = get_provider_meta(provider)
     return {
-        "provider": ai.get("provider", "doubao"),
+        "provider": provider,
+        "provider_meta": meta,
         "web_url": ai.get("web_url", ""),
         "timeout": ai.get("timeout", 180),
         "browser_mode": browser.get("mode", "cdp"),
@@ -195,7 +200,62 @@ async def update_settings(s: SettingsIn):
         "ok": True,
         "ai_online": engine.online,
         "provider": provider,
+        "provider_meta": get_provider_meta(provider),
         "web_url": engine.driver.url if engine.driver else "",
+        "browser_connected": bool(engine and engine.driver.connected),
+    }
+
+
+@app.get("/api/providers")
+async def api_providers():
+    """返回所有可用网页 AI 的目录（前端渲染卡片网格与快捷切换菜单用）。"""
+    return {"ok": True, "providers": list_providers()}
+
+
+class ProviderSwitchIn(BaseModel):
+    provider: str
+    web_url: Optional[str] = None  # 留空则用 catalog 默认网址
+
+
+@app.post("/api/provider/switch")
+async def api_provider_switch(s: ProviderSwitchIn):
+    """一键切换网页 AI：仅改 provider + 默认网址，浏览器配置不变。
+
+    用于顶栏快捷切换芯片：用户点击某个 AI 卡片即立即切换，
+    无需打开完整设置弹层。
+    """
+    if s.provider not in PROVIDER_CATALOG:
+        return JSONResponse(
+            {"ok": False, "error": f"未知 provider：{s.provider}"},
+            status_code=400,
+        )
+    meta = PROVIDER_CATALOG[s.provider]
+    cfg = load_config()
+    ai = cfg.setdefault("ai", {})
+    ai["provider"] = s.provider
+    # 切换到非 custom 时，若用户未显式给 web_url，则用 catalog 默认网址
+    if s.provider == "custom":
+        ai["web_url"] = (s.web_url or "").strip() or ai.get("web_url", "")
+        if not ai["web_url"]:
+            return JSONResponse(
+                {"ok": False, "error": "自定义模式必须填写网页 AI 聊天页地址"},
+                status_code=400,
+            )
+    else:
+        ai["web_url"] = (s.web_url or "").strip() or meta["url"]
+    # 重建引擎应用新 provider
+    if _state.get("ai"):
+        await _state["ai"].close()
+    if _state.get("daw"):
+        _state["daw"].close()
+    _build_engines(cfg)
+    engine = _state["ai"]
+    return {
+        "ok": True,
+        "provider": s.provider,
+        "provider_meta": meta,
+        "web_url": ai["web_url"],
+        "ai_online": engine.online,
         "browser_connected": bool(engine and engine.driver.connected),
     }
 

@@ -27,6 +27,23 @@
     <div class="status">
       <span class="chip" id="chip-ai"><i class="dot"></i>AI 离线</span>
       <span class="chip" id="chip-daw"><i class="dot"></i>DAW 模拟</span>
+
+      <!-- 网页 AI 快捷切换 -->
+      <div class="ai-switcher" id="ai-switcher">
+        <button class="ai-switcher-btn" id="ai-switcher-btn" title="点击切换网页端 AI" aria-haspopup="listbox" aria-expanded="false">
+          <span class="ai-badge" id="ai-switcher-badge">豆</span>
+          <span class="ai-switcher-name" id="ai-switcher-name">豆包</span>
+          <span class="ai-switcher-caret">▾</span>
+        </button>
+        <div class="ai-switcher-popover" id="ai-switcher-popover" role="listbox" hidden>
+          <div class="ai-switcher-search">
+            <input type="text" id="ai-switcher-search" placeholder="搜索 AI 名称或厂商…" />
+          </div>
+          <div class="ai-switcher-list" id="ai-switcher-list"></div>
+          <button class="ai-switcher-more" id="ai-switcher-more">管理全部…</button>
+        </div>
+      </div>
+
       <button class="ghost-btn" id="btn-diag">诊断</button>
       <button class="ghost-btn" id="btn-settings">设置</button>
     </div>
@@ -163,29 +180,27 @@
 
   <!-- 设置弹层 -->
   <div class="modal" id="modal-settings" aria-hidden="true">
-    <div class="modal-card">
+    <div class="modal-card modal-card-wide">
       <div class="modal-head">
         <h2>网页 AI 设置</h2>
         <button class="ghost-btn" id="btn-close-settings">关闭</button>
       </div>
-      <p class="modal-hint">本项目<b>不使用 API</b>，而是复用你已登录的网页端 AI。选择你要用的 AI 服务（或选「自定义」填任意网址），在 Chrome 里打开对应网址登录后，点「测试连接」即可。Playwright 未安装时自动降级为内置 demo 生成器。</p>
+      <p class="modal-hint">本项目<b>不使用 API</b>，而是复用你已登录的网页端 AI。点击下方任一 AI 卡片即可选中（或在顶栏快捷切换），然后在 Chrome 里打开对应网址登录后点「测试连接」。Playwright 未安装时自动降级为内置 demo 生成器。</p>
+
+      <label class="form-label">选择网页端 AI</label>
+      <div class="provider-grid" id="provider-grid"></div>
+      <div id="provider-hint" class="field-hint"></div>
+
       <div class="form">
-        <label>网页 AI 服务
-          <select id="set-provider">
-            <option value="doubao">豆包（doubao.com）</option>
-            <option value="kimi">Kimi（kimi.moonshot.cn）</option>
-            <option value="qwen">通义千问（tongyi.aliyun.com）</option>
-            <option value="zhipu">智谱清言（chatglm.cn）</option>
-            <option value="custom">自定义（填任意网页 AI 网址）</option>
-          </select>
-        </label>
-        <div id="provider-hint" class="field-hint"></div>
-        <label>网页 AI 聊天页地址（切换上方服务会自动填充，可手动修改）
+        <label>网页 AI 聊天页地址（点击上方卡片自动填充，可手动修改）
           <input id="set-weburl" type="text" placeholder="https://www.doubao.com/chat/" />
         </label>
-        <label>等待回复超时（秒）
-          <input id="set-timeout" type="number" step="10" min="30" max="600" value="180" />
-        </label>
+        <div class="form-row">
+          <button class="ghost-btn" id="btn-open-login" title="在新标签页打开该网页 AI 的登录页">打开登录页</button>
+          <label class="inline-label">等待回复超时（秒）
+            <input id="set-timeout" type="number" step="10" min="30" max="600" value="180" />
+          </label>
+        </div>
         <label>浏览器连接方式
           <select id="set-bmode">
             <option value="cdp">CDP（连接已登录的 Chrome，推荐）</option>
@@ -201,14 +216,16 @@
       </div>
       <div class="modal-foot">
         <span id="set-status" class="muted"></span>
-        <button class="ghost-btn" id="btn-test-connect">测试连接</button>
-        <button class="primary-btn" id="btn-save-settings">保存并应用</button>
+        <div class="modal-actions">
+          <button class="ghost-btn" id="btn-test-connect">测试连接</button>
+          <button class="primary-btn" id="btn-save-settings">保存并应用</button>
+        </div>
       </div>
     </div>
   </div>
 
   <footer class="footer">
-    <span>AI-DAW-Conductor · 复用你已登录的网页 AI（豆包/Kimi/千问）驱动 Logic Pro · 无需 API Key</span>
+    <span>AI-DAW-Conductor · 复用你已登录的网页 AI（豆包/Kimi/千问/DeepSeek/Claude/Gemini 等 13+）驱动 Logic Pro · 无需 API Key</span>
   </footer>
 
   <!-- 诊断弹层 -->

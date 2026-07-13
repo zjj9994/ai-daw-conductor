@@ -32,14 +32,46 @@ from . import music_theory as mt
 log = logging.getLogger("ai_engine")
 
 
-# ---------- 各网页 AI 默认入口 ----------
-DEFAULT_URLS = {
-    "doubao": "https://www.doubao.com/chat/",
-    "kimi": "https://kimi.moonshot.cn/",
-    "qwen": "https://tongyi.aliyun.com/qianwen/",
-    "zhipu": "https://chatglm.cn/main/detail/",
-    "custom": "",
+# ---------- 网页 AI provider 目录（前后端共享元数据） ----------
+# 每条记录包含：显示名/默认网址/首字母徽章/品牌色/厂商/地区/排序权重
+# 前端通过 /api/providers 拉取本目录渲染卡片网格与快捷切换菜单。
+PROVIDER_CATALOG = {
+    # 国内主流
+    "doubao":   {"name": "豆包",       "url": "https://www.doubao.com/chat/",         "initial": "豆", "color": "#3b82f6", "vendor": "字节跳动",   "region": "cn", "order": 1},
+    "kimi":     {"name": "Kimi",       "url": "https://kimi.moonshot.cn/",             "initial": "K",  "color": "#8b5cf6", "vendor": "Moonshot",   "region": "cn", "order": 2},
+    "qwen":     {"name": "通义千问",   "url": "https://tongyi.aliyun.com/qianwen/",    "initial": "通", "color": "#6366f1", "vendor": "阿里云",     "region": "cn", "order": 3},
+    "zhipu":    {"name": "智谱清言",   "url": "https://chatglm.cn/main/detail/",       "initial": "智", "color": "#10b981", "vendor": "智谱 AI",    "region": "cn", "order": 4},
+    "deepseek": {"name": "DeepSeek",   "url": "https://chat.deepseek.com/",            "initial": "D",  "color": "#06b6d4", "vendor": "深度求索",   "region": "cn", "order": 5},
+    "yiyan":    {"name": "文心一言",   "url": "https://yiyan.baidu.com/",              "initial": "文", "color": "#dc2626", "vendor": "百度",       "region": "cn", "order": 6},
+    "hunyuan":  {"name": "腾讯混元",   "url": "https://hunyuan.tencent.com/bot/chat",  "initial": "混", "color": "#0ea5e9", "vendor": "腾讯",       "region": "cn", "order": 7},
+    "spark":    {"name": "讯飞星火",   "url": "https://xinghuo.xfyun.cn/dchat",        "initial": "星", "color": "#f59e0b", "vendor": "科大讯飞",   "region": "cn", "order": 8},
+    "hailuo":   {"name": "海螺 AI",    "url": "https://hailuo.com/",                   "initial": "海", "color": "#fb7185", "vendor": "MiniMax",    "region": "cn", "order": 9},
+    # 国际主流
+    "chatgpt":  {"name": "ChatGPT",    "url": "https://chat.openai.com/",              "initial": "G",  "color": "#10a37f", "vendor": "OpenAI",     "region": "global", "order": 10},
+    "claude":   {"name": "Claude",     "url": "https://claude.ai/new",                 "initial": "C",  "color": "#d97706", "vendor": "Anthropic",  "region": "global", "order": 11},
+    "gemini":   {"name": "Gemini",     "url": "https://gemini.google.com/",            "initial": "Gm", "color": "#4285f4", "vendor": "Google",     "region": "global", "order": 12},
+    "grok":     {"name": "Grok",       "url": "https://grok.com/",                     "initial": "X",  "color": "#e5e7eb", "vendor": "xAI",        "region": "global", "order": 13},
+    "perplexity": {"name": "Perplexity", "url": "https://www.perplexity.ai/",          "initial": "P",  "color": "#22d3ee", "vendor": "Perplexity", "region": "global", "order": 14},
+    # 自定义兜底
+    "custom":   {"name": "自定义",     "url": "",                                       "initial": "+",  "color": "#7fa39a", "vendor": "任意",       "region": "any",    "order": 99},
 }
+
+# 向后兼容：DEFAULT_URLS 由 PROVIDER_CATALOG 派生
+DEFAULT_URLS = {k: v["url"] for k, v in PROVIDER_CATALOG.items()}
+
+
+def _default_profile():
+    """通用网页 AI 选择器画像（绝大多数网页 AI 都用 textarea 输入 + 回车发送）。"""
+    return {
+        "input": "textarea, [contenteditable='true']",
+        "input_type": "auto",
+        "send": "",
+        "send_via_enter": True,
+        "response": "",
+        "generating": "button:has-text('停止'), [class*='stop']",
+        "new_chat": "a:has-text('新对话'), button:has-text('新对话'), button:has-text('新建')",
+    }
+
 
 # ---------- 各网页 AI 的选择器画像 ----------
 # 这些是基于常见 DOM 的最佳-effort 选择器；网页改版后可在 config.ai.selectors 覆盖。
@@ -82,6 +114,15 @@ PROVIDER_PROFILES = {
         "generating": "button:has-text('停止')",
         "new_chat": "button:has-text('新对话')",
     },
+    "deepseek": {
+        "input": "textarea, [contenteditable='true']",
+        "input_type": "auto",
+        "send": "",
+        "send_via_enter": True,
+        "response": "[class*='markdown'], [class*='answer']",
+        "generating": "button:has-text('停止')",
+        "new_chat": "button:has-text('新对话')",
+    },
     "custom": {
         "input": "textarea, [contenteditable='true']",
         "input_type": "auto",
@@ -95,6 +136,24 @@ PROVIDER_PROFILES = {
 
 # 通用兜底（provider 未匹配时使用）
 DEFAULT_SELECTORS = PROVIDER_PROFILES["custom"]
+
+
+def get_provider_meta(provider: str) -> dict:
+    """取 provider 元数据；未知 provider 回退到 custom。"""
+    return PROVIDER_CATALOG.get(provider, PROVIDER_CATALOG["custom"])
+
+
+def list_providers() -> list[dict]:
+    """返回按 order 排序的 provider 列表（含 key 字段，供前端渲染卡片）。"""
+    items = []
+    for key, v in PROVIDER_CATALOG.items():
+        items.append({
+            "key": key, "name": v["name"], "url": v["url"],
+            "initial": v["initial"], "color": v["color"],
+            "vendor": v["vendor"], "region": v["region"], "order": v["order"],
+        })
+    items.sort(key=lambda x: x["order"])
+    return items
 
 
 SYSTEM_BASE = """你是世界级、出版级（publication-grade）音乐制作人，精通 Logic Pro 全部工作流与

@@ -15,6 +15,7 @@ const state = {
   lastPrompt: "",         // 最近一次创作指令（用于重试）
   selfEval: true,         // 自主模式是否启用自评估
   visualStepCount: 0,     // 视觉模式已执行步数
+  selectedProvider: "doubao",  // 当前选中的网页 AI（顶栏快捷切换 + 设置弹层共用）
 };
 
 const STAGE_NAMES = { compose: "作曲", arrange: "编曲", mix: "混音", master: "母带" };
@@ -673,7 +674,7 @@ function saveLocalSettings(obj) {
 }
 function collectSettingsForm() {
   return {
-    provider: $("#set-provider").value,
+    provider: state.selectedProvider || "doubao",
     web_url: $("#set-weburl").value.trim(),
     timeout: parseFloat($("#set-timeout").value) || 180,
     browser_mode: $("#set-bmode").value,
@@ -682,56 +683,222 @@ function collectSettingsForm() {
   };
 }
 
-// 各 provider 的默认网址（与后端 DEFAULT_URLS 保持一致）
-const PROVIDER_DEFAULT_URLS = {
-  doubao: "https://www.doubao.com/chat/",
-  kimi: "https://kimi.moonshot.cn/",
-  qwen: "https://tongyi.aliyun.com/qianwen/",
-  zhipu: "https://chatglm.cn/main/detail/",
-  custom: "",
-};
+// ---------- 网页 AI provider 目录（启动时从 /api/providers 拉取，作为兜底用静态镜像） ----------
+let PROVIDER_CATALOG = null;  // 数组形式（来自 /api/providers），含 key/name/url/initial/color/vendor/region/order
+
+const PROVIDER_CATALOG_FALLBACK = [
+  { key: "doubao",   name: "豆包",       url: "https://www.doubao.com/chat/",         initial: "豆", color: "#3b82f6", vendor: "字节跳动",   region: "cn",     order: 1 },
+  { key: "kimi",     name: "Kimi",       url: "https://kimi.moonshot.cn/",             initial: "K",  color: "#8b5cf6", vendor: "Moonshot",   region: "cn",     order: 2 },
+  { key: "qwen",     name: "通义千问",   url: "https://tongyi.aliyun.com/qianwen/",    initial: "通", color: "#6366f1", vendor: "阿里云",     region: "cn",     order: 3 },
+  { key: "zhipu",    name: "智谱清言",   url: "https://chatglm.cn/main/detail/",       initial: "智", color: "#10b981", vendor: "智谱 AI",    region: "cn",     order: 4 },
+  { key: "deepseek", name: "DeepSeek",   url: "https://chat.deepseek.com/",            initial: "D",  color: "#06b6d4", vendor: "深度求索",   region: "cn",     order: 5 },
+  { key: "yiyan",    name: "文心一言",   url: "https://yiyan.baidu.com/",              initial: "文", color: "#dc2626", vendor: "百度",       region: "cn",     order: 6 },
+  { key: "hunyuan",  name: "腾讯混元",   url: "https://hunyuan.tencent.com/bot/chat",  initial: "混", color: "#0ea5e9", vendor: "腾讯",       region: "cn",     order: 7 },
+  { key: "spark",    name: "讯飞星火",   url: "https://xinghuo.xfyun.cn/dchat",        initial: "星", color: "#f59e0b", vendor: "科大讯飞",   region: "cn",     order: 8 },
+  { key: "hailuo",   name: "海螺 AI",    url: "https://hailuo.com/",                   initial: "海", color: "#fb7185", vendor: "MiniMax",    region: "cn",     order: 9 },
+  { key: "chatgpt",  name: "ChatGPT",    url: "https://chat.openai.com/",              initial: "G",  color: "#10a37f", vendor: "OpenAI",     region: "global", order: 10 },
+  { key: "claude",   name: "Claude",     url: "https://claude.ai/new",                 initial: "C",  color: "#d97706", vendor: "Anthropic",  region: "global", order: 11 },
+  { key: "gemini",   name: "Gemini",     url: "https://gemini.google.com/",            initial: "Gm", color: "#4285f4", vendor: "Google",     region: "global", order: 12 },
+  { key: "grok",     name: "Grok",       url: "https://grok.com/",                     initial: "X",  color: "#e5e7eb", vendor: "xAI",        region: "global", order: 13 },
+  { key: "perplexity", name: "Perplexity", url: "https://www.perplexity.ai/",          initial: "P",  color: "#22d3ee", vendor: "Perplexity", region: "global", order: 14 },
+  { key: "custom",   name: "自定义",     url: "",                                       initial: "+",  color: "#7fa39a", vendor: "任意",       region: "any",    order: 99 },
+];
+
+async function ensureProviderCatalog() {
+  if (PROVIDER_CATALOG) return PROVIDER_CATALOG;
+  try {
+    const r = await fetch("/api/providers");
+    const j = await r.json();
+    if (j.ok && Array.isArray(j.providers) && j.providers.length) {
+      PROVIDER_CATALOG = j.providers;
+      return PROVIDER_CATALOG;
+    }
+  } catch (e) {}
+  PROVIDER_CATALOG = PROVIDER_CATALOG_FALLBACK;
+  return PROVIDER_CATALOG;
+}
+
+function findProvider(key) {
+  const list = PROVIDER_CATALOG || PROVIDER_CATALOG_FALLBACK;
+  return list.find((p) => p.key === key) || list.find((p) => p.key === "doubao");
+}
+
+// ---------- 设置弹层：provider 卡片网格 ----------
+function renderProviderGrid(selectedKey) {
+  const grid = $("#provider-grid");
+  if (!grid) return;
+  const list = PROVIDER_CATALOG || PROVIDER_CATALOG_FALLBACK;
+  grid.innerHTML = "";
+  list.forEach((p) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "provider-card" + (p.key === selectedKey ? " selected" : "");
+    card.dataset.key = p.key;
+    card.title = p.vendor ? `${p.name}（${p.vendor}）` : p.name;
+    card.innerHTML = `
+      <span class="provider-badge" style="--pc:${p.color}">${escapeHtml(p.initial)}</span>
+      <span class="provider-info">
+        <span class="provider-name">${escapeHtml(p.name)}</span>
+        <span class="provider-vendor">${escapeHtml(p.vendor || "")}</span>
+      </span>
+      <span class="provider-check" aria-hidden="true">✓</span>
+    `;
+    card.addEventListener("click", () => selectProviderInForm(p.key));
+    grid.appendChild(card);
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
+
+function selectProviderInForm(key) {
+  state.selectedProvider = key;
+  const p = findProvider(key);
+  if (!p) return;
+  // 标记选中卡片
+  $$(".provider-card").forEach((el) => {
+    el.classList.toggle("selected", el.dataset.key === key);
+  });
+  // 联动网址：若当前网址为空或等于其它 provider 默认值，则更新为这个 provider 的默认值
+  const curUrl = ($("#set-weburl").value || "").trim();
+  const isDefault = !curUrl || (PROVIDER_CATALOG || PROVIDER_CATALOG_FALLBACK).some((x) => x.url === curUrl);
+  if (isDefault) {
+    $("#set-weburl").value = p.url || "";
+  }
+  updateProviderHint();
+}
 
 function fillSettingsForm(s) {
-  $("#set-provider").value = s.provider || "doubao";
+  const provider = s.provider || "doubao";
+  state.selectedProvider = provider;
+  renderProviderGrid(provider);
   // 网址：若服务端返回空，按当前 provider 填默认值，便于用户看到/编辑
   const url = s.web_url || "";
-  $("#set-weburl").value = url || PROVIDER_DEFAULT_URLS[s.provider || "doubao"] || "";
+  const p = findProvider(provider);
+  $("#set-weburl").value = url || (p ? p.url : "") || "";
   $("#set-timeout").value = s.timeout || 180;
   $("#set-bmode").value = s.browser_mode || "cdp";
   $("#set-cdpurl").value = s.cdp_url || "http://127.0.0.1:9222";
   $("#set-userdata").value = s.user_data_dir || "";
   updateProviderHint();
-}
-
-// 切换 provider 时联动网址：若当前网址是某 provider 的默认值或为空，则更新为新 provider 的默认值
-function onProviderChange() {
-  const provider = $("#set-provider").value;
-  const curUrl = $("#set-weburl").value.trim();
-  // 若当前网址等于任意一个已知 provider 的默认值，或为空，则视为「未自定义」可安全替换
-  const isDefault = !curUrl || Object.values(PROVIDER_DEFAULT_URLS).includes(curUrl);
-  if (isDefault) {
-    $("#set-weburl").value = PROVIDER_DEFAULT_URLS[provider] || "";
-  }
-  updateProviderHint();
+  // 同步顶栏快捷切换芯片
+  updateSwitcherChip(provider, s);
 }
 
 // 根据 provider 显示对应登录提示
 function updateProviderHint() {
-  const provider = $("#set-provider").value;
+  const provider = state.selectedProvider || "doubao";
+  const p = findProvider(provider);
   const hint = $("#provider-hint");
-  if (!hint) return;
-  const tips = {
-    doubao: "打开 doubao.com 登录豆包，或在 Chrome 里登录后用 CDP 连接",
-    kimi: "打开 kimi.moonshot.cn 登录 Kimi，或在 Chrome 里登录后用 CDP 连接",
-    qwen: "打开 tongyi.aliyun.com 登录通义千问，或在 Chrome 里登录后用 CDP 连接",
-    zhipu: "打开 chatglm.cn 登录智谱清言，或在 Chrome 里登录后用 CDP 连接",
-    custom: "在下方网址栏填入你要用的网页 AI 聊天页地址（需含 https://），在 Chrome 里登录该页面后用 CDP 连接",
-  };
-  hint.textContent = tips[provider] || "";
+  if (!hint || !p) return;
+  if (provider === "custom") {
+    hint.textContent = "在下方网址栏填入你要用的网页 AI 聊天页地址（需含 https://），在 Chrome 里登录该页面后用 CDP 连接";
+  } else {
+    const host = (p.url || "").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    hint.textContent = `打开 ${host} 登录${p.name}，或点下方「打开登录页」按钮，登录后用 CDP 连接`;
+  }
 }
 
-$("#btn-settings").addEventListener("click", async () => {
+// ---------- 顶栏快捷切换芯片 ----------
+function updateSwitcherChip(provider, status) {
+  const p = findProvider(provider);
+  if (!p) return;
+  const badge = $("#ai-switcher-badge");
+  const name = $("#ai-switcher-name");
+  if (badge) {
+    badge.textContent = p.initial;
+    badge.style.setProperty("--pc", p.color);
+  }
+  if (name) name.textContent = p.name;
+  // 联机状态用 chip-ai 显示，这里只更新名称
+  if (status) {
+    const online = status.ai_online;
+    const connected = status.browser_connected;
+    setChip("#chip-ai", online, online ? (connected ? `${p.name} 已连接` : `${p.name} 就绪`) : `${p.name} demo`);
+  }
+}
+
+function renderSwitcherList(filter) {
+  const box = $("#ai-switcher-list");
+  if (!box) return;
+  const list = PROVIDER_CATALOG || PROVIDER_CATALOG_FALLBACK;
+  const q = (filter || "").trim().toLowerCase();
+  const filtered = q
+    ? list.filter((p) => (p.name + " " + (p.vendor || "") + " " + p.key).toLowerCase().includes(q))
+    : list;
+  box.innerHTML = "";
+  if (!filtered.length) {
+    box.innerHTML = '<div class="ai-switcher-empty">无匹配 AI</div>';
+    return;
+  }
+  const current = state.selectedProvider || "doubao";
+  filtered.forEach((p) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "ai-switcher-item" + (p.key === current ? " current" : "");
+    item.innerHTML = `
+      <span class="provider-badge sm" style="--pc:${p.color}">${escapeHtml(p.initial)}</span>
+      <span class="ai-switcher-item-info">
+        <span class="ai-switcher-item-name">${escapeHtml(p.name)}</span>
+        <span class="ai-switcher-item-vendor">${escapeHtml(p.vendor || "")}</span>
+      </span>
+      ${p.key === current ? '<span class="ai-switcher-item-check">✓</span>' : ""}
+    `;
+    item.addEventListener("click", () => {
+      switchProviderQuick(p.key);
+      closeSwitcher();
+    });
+    box.appendChild(item);
+  });
+}
+
+function openSwitcher() {
+  const pop = $("#ai-switcher-popover");
+  if (!pop) return;
+  pop.hidden = false;
+  $("#ai-switcher-btn").setAttribute("aria-expanded", "true");
+  renderSwitcherList("");
+  const search = $("#ai-switcher-search");
+  if (search) { search.value = ""; search.focus(); }
+}
+function closeSwitcher() {
+  const pop = $("#ai-switcher-popover");
+  if (!pop) return;
+  pop.hidden = true;
+  $("#ai-switcher-btn").setAttribute("aria-expanded", "false");
+}
+
+async function switchProviderQuick(key) {
+  const p = findProvider(key);
+  if (!p) return;
+  // custom 必须填网址，引导用户去设置弹层
+  if (key === "custom") {
+    openSettingsModal();
+    return;
+  }
+  try {
+    const res = await fetch("/api/provider/switch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: key }),
+    });
+    const j = await res.json();
+    if (!res.ok || !j.ok) {
+      addLog("warn", `切换 ${p.name} 失败：${j.error || res.status}`);
+      return;
+    }
+    state.selectedProvider = key;
+    updateSwitcherChip(key, j);
+    addLog("info", `已切换到 ${p.name}（${j.web_url}）`, "event");
+  } catch (e) {
+    addLog("warn", `切换 ${p.name} 失败：${e}`);
+  }
+}
+
+// ---------- 设置弹层开关 ----------
+async function openSettingsModal() {
   modal.classList.add("open");
+  await ensureProviderCatalog();
   // 先用本地缓存填充表单（即时），再用服务端实际值覆盖
   fillSettingsForm(loadLocalSettings());
   try {
@@ -740,10 +907,48 @@ $("#btn-settings").addEventListener("click", async () => {
     const tag = s.ai_online ? (s.browser_connected ? "已连接网页 AI" : "网页 AI 就绪（未连接）") : "未启用（demo）";
     $("#set-status").textContent = "当前：" + tag;
   } catch (e) {}
-});
-$("#set-provider").addEventListener("change", onProviderChange);
+}
+
+$("#btn-settings").addEventListener("click", openSettingsModal);
 $("#btn-close-settings").addEventListener("click", () => modal.classList.remove("open"));
 modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.remove("open"); });
+
+// 顶栏快捷切换芯片交互
+$("#ai-switcher-btn").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const pop = $("#ai-switcher-popover");
+  if (pop.hidden) {
+    await ensureProviderCatalog();
+    openSwitcher();
+  } else {
+    closeSwitcher();
+  }
+});
+$("#ai-switcher-search").addEventListener("input", (e) => {
+  renderSwitcherList(e.target.value);
+});
+$("#ai-switcher-more").addEventListener("click", () => {
+  closeSwitcher();
+  openSettingsModal();
+});
+document.addEventListener("click", (e) => {
+  const sw = $("#ai-switcher");
+  if (sw && !sw.contains(e.target)) closeSwitcher();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeSwitcher();
+});
+
+// 打开登录页按钮：在新标签页打开当前选中 AI 的网址
+$("#btn-open-login").addEventListener("click", () => {
+  const url = ($("#set-weburl").value || "").trim();
+  if (!url || !/^https?:\/\//.test(url)) {
+    $("#set-status").textContent = "✗ 网址无效，请先选择 AI 或填写网址";
+    return;
+  }
+  window.open(url, "_blank", "noopener");
+  $("#set-status").textContent = "已在新标签页打开登录页：登录后回到此处点「测试连接」";
+});
 
 $("#btn-save-settings").addEventListener("click", async () => {
   const form = collectSettingsForm();
@@ -766,12 +971,15 @@ $("#btn-save-settings").addEventListener("click", async () => {
       $("#set-status").textContent = "✗ " + (j.error || "保存失败");
       return;
     }
-    const providerName = { doubao: "豆包", kimi: "Kimi", qwen: "通义千问", zhipu: "智谱清言", custom: "自定义" }[j.provider] || j.provider;
+    const p = findProvider(j.provider);
+    const providerName = p ? p.name : j.provider;
     if (j.ai_online) {
       $("#set-status").textContent = `已保存 · ${providerName} 网页 AI 就绪`;
     } else {
       $("#set-status").textContent = "已保存 · demo 模式（未安装 Playwright 或未填网址）";
     }
+    state.selectedProvider = j.provider;
+    updateSwitcherChip(j.provider, j);
     setChip("#chip-ai", j.ai_online, j.ai_online ? `${providerName} 就绪` : "demo 模式");
   } catch (e) {
     $("#set-status").textContent = "保存失败：" + e;
@@ -786,8 +994,9 @@ $("#btn-test-connect").addEventListener("click", async () => {
     const res = await fetch("/api/browser/connect", { method: "POST" });
     const j = await res.json();
     if (j.ok) {
-      $("#set-status").textContent = "✓ 已连接：" + (j.url || j.provider);
-      setChip("#chip-ai", true, "已连接网页 AI");
+      const p = findProvider(state.selectedProvider);
+      $("#set-status").textContent = "✓ 已连接：" + (p ? p.name : "") + " · " + (j.url || "");
+      setChip("#chip-ai", true, (p ? p.name : "网页 AI") + " 已连接");
     } else {
       $("#set-status").textContent = "✗ " + (j.error || "连接失败");
     }
@@ -796,11 +1005,26 @@ $("#btn-test-connect").addEventListener("click", async () => {
   }
 });
 
-// 平台检测
-fetch("/api/health").then((r) => r.json()).then((h) => {
-  setChip("#chip-daw", h.daw_platform === "macos", h.daw_platform === "macos" ? "DAW 实控" : "DAW 模拟");
-  setChip("#chip-ai", h.ai_online, h.ai_online ? "网页 AI 就绪" : "demo 模式");
-}).catch(() => {});
+// 平台检测 + 启动时初始化 provider 目录与顶栏快捷切换芯片
+(async () => {
+  try {
+    const [hh, ss] = await Promise.allSettled([
+      fetch("/api/health").then((r) => r.json()),
+      fetch("/api/settings").then((r) => r.json()),
+    ]);
+    const h = hh.status === "fulfilled" ? hh.value : {};
+    const s = ss.status === "fulfilled" ? ss.value : {};
+    setChip("#chip-daw", h.daw_platform === "macos", h.daw_platform === "macos" ? "DAW 实控" : "DAW 模拟");
+    await ensureProviderCatalog();
+    const provider = s.provider || "doubao";
+    state.selectedProvider = provider;
+    // 合并 health + settings 的在线状态给芯片
+    updateSwitcherChip(provider, {
+      ai_online: s.ai_online != null ? s.ai_online : h.ai_online,
+      browser_connected: s.browser_connected != null ? s.browser_connected : h.browser_connected,
+    });
+  } catch (e) {}
+})();
 
 // ---------- 背景示波器 ----------
 (function scope() {

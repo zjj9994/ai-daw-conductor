@@ -68,7 +68,11 @@ def is_macos() -> bool:
     return os.uname().sysname == "Darwin"
 
 
-VALID_PROVIDERS = {"doubao", "kimi", "qwen", "zhipu", "custom"}
+VALID_PROVIDERS = {
+    "doubao", "kimi", "qwen", "zhipu", "deepseek", "yiyan", "hunyuan",
+    "spark", "hailuo", "chatgpt", "claude", "gemini", "grok",
+    "perplexity", "custom",
+}
 VALID_BROWSER_MODES = {"cdp", "persistent"}
 
 
