@@ -337,3 +337,65 @@ def test_visual_step_accepts_string_actions_array():
     assert step.actions[0].op == "open_piano_roll"
     assert step.tracks[0].name == "奢华经典"
     assert step.transports[0].op == "goto"
+
+
+# ---------- 重建引擎迁移工程锚点（修复「工程在创作流程中被关闭」bug） ----------
+
+def test_build_engines_migrates_project_anchor():
+    """_build_engines 重建 DAWController 时必须迁移工程锚点状态。
+
+    用户反馈：在创作流程中保存设置或切换 provider 后，工程锚点丢失，
+    后续 AI 以为没有工程而再次 create_project，导致工程被「关闭/重建」。
+    修复：_build_engines 接受 old_daw 参数，迁移 project_locked/
+    current_project_path/current_project_title/_track_index。
+    """
+    from backend.server import _build_engines
+    from backend.daw_controller import DAWController
+    # 构造一个已锁定的旧 daw（跳过 __init__ 的重资源）
+    old_daw = DAWController.__new__(DAWController)
+    old_daw.project_locked = True
+    old_daw.current_project_path = "/tmp/my_song.logicx"
+    old_daw.current_project_title = "我的歌"
+    old_daw._track_index = {"Piano": MagicMock()}
+    # 用最小 cfg 重建（模拟保存设置）
+    cfg = {"ai": {"provider": "custom", "web_url": "http://example.com"},
+           "daw": {"use_applescript": False}}
+    _build_engines(cfg, old_daw=old_daw)
+    from backend.server import _state
+    new_daw = _state["daw"]
+    # 锚点状态应被迁移，不能丢失
+    assert new_daw.project_locked is True
+    assert new_daw.current_project_path == "/tmp/my_song.logicx"
+    assert new_daw.current_project_title == "我的歌"
+    assert "Piano" in new_daw._track_index
+    # 清理 _state，避免污染后续测试
+    _state.clear()
+
+
+def test_build_engines_without_old_daw_does_not_lock():
+    """无 old_daw 时（首次启动），新 daw 不应被锁定。"""
+    from backend.server import _build_engines, _state
+    cfg = {"ai": {"provider": "custom", "web_url": "http://example.com"},
+           "daw": {"use_applescript": False}}
+    _build_engines(cfg)
+    new_daw = _state["daw"]
+    assert new_daw.project_locked is False
+    assert new_daw.current_project_path is None
+    _state.clear()
+
+
+def test_build_engines_with_unlocked_old_daw_does_not_lock():
+    """旧 daw 未锁定时，新 daw 也不应被锁定（不误造锚点）。"""
+    from backend.server import _build_engines, _state
+    from backend.daw_controller import DAWController
+    old_daw = DAWController.__new__(DAWController)
+    old_daw.project_locked = False
+    old_daw.current_project_path = None
+    old_daw.current_project_title = ""
+    old_daw._track_index = {}
+    cfg = {"ai": {"provider": "custom", "web_url": "http://example.com"},
+           "daw": {"use_applescript": False}}
+    _build_engines(cfg, old_daw=old_daw)
+    new_daw = _state["daw"]
+    assert new_daw.project_locked is False
+    _state.clear()

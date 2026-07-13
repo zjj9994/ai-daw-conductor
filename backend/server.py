@@ -58,9 +58,20 @@ _visual: Optional[VisualLoop] = None
 tracker = TaskTracker(history_file=DEFAULT_HISTORY_FILE)
 
 
-def _build_engines(cfg: dict):
+def _build_engines(cfg: dict, old_daw: Optional[DAWController] = None):
     ai = AIEngine(cfg)
     daw = DAWController(cfg, event_cb=broadcast, tracker=tracker)
+    # 工程一致性：重建引擎（保存设置/切换 provider）时，必须把旧 daw 的工程锚点
+    # 迁移到新 daw，否则 project_locked/current_project_path 丢失，后续 AI 会以为
+    # 没有工程而再次 create_project，导致「工程在创作流程中被关闭/重建」的 bug。
+    # Logic Pro 里的工程文件仍然打开着，只是 Python 侧的引用对象被替换了。
+    if old_daw is not None and getattr(old_daw, "project_locked", False):
+        daw.project_locked = old_daw.project_locked
+        daw.current_project_path = old_daw.current_project_path
+        daw.current_project_title = old_daw.current_project_title
+        daw._track_index = dict(old_daw._track_index)
+        log.info("迁移工程锚点：title=%s path=%s",
+                 daw.current_project_title, daw.current_project_path)
     commander = Commander(ai, daw, tracker=tracker)
     daw_cfg = cfg.get("daw", {})
     screenshot = ScreenshotCapture(
@@ -246,13 +257,16 @@ async def update_settings(s: SettingsIn):
             status_code=400,
         )
     # 重建引擎以应用新配置（先关闭旧的浏览器/DAW 连接）
+    # 注意：daw.close() 只关闭 MIDI 端口，不会关闭 Logic Pro 工程；
+    # 工程锚点状态通过 old_daw 迁移到新 daw，保证创作流程中工程不被「关闭」。
+    old_daw = _state.get("daw")
     if _state.get("ai"):
         await _state["ai"].close()
-    if _state.get("daw"):
-        _state["daw"].close()
+    if old_daw:
+        old_daw.close()
     # _build_engines 含同步 IO（mkdir/mido.open_output），放线程池并加超时，避免阻塞事件循环
     try:
-        await asyncio.wait_for(asyncio.to_thread(_build_engines, cfg), timeout=10.0)
+        await asyncio.wait_for(asyncio.to_thread(_build_engines, cfg, old_daw), timeout=10.0)
     except asyncio.TimeoutError:
         log.error("重建引擎超时（10s），可能 MIDI 子系统或文件系统无响应")
         return JSONResponse(
@@ -307,14 +321,15 @@ async def api_provider_switch(s: ProviderSwitchIn):
             )
     else:
         ai["web_url"] = (s.web_url or "").strip() or meta["url"]
-    # 重建引擎应用新 provider
+    # 重建引擎应用新 provider（迁移工程锚点，避免创作流程中工程被关闭）
+    old_daw = _state.get("daw")
     if _state.get("ai"):
         await _state["ai"].close()
-    if _state.get("daw"):
-        _state["daw"].close()
+    if old_daw:
+        old_daw.close()
     # _build_engines 含同步 IO，放线程池并加超时
     try:
-        await asyncio.wait_for(asyncio.to_thread(_build_engines, cfg), timeout=10.0)
+        await asyncio.wait_for(asyncio.to_thread(_build_engines, cfg, old_daw), timeout=10.0)
     except asyncio.TimeoutError:
         log.error("切换 provider 时重建引擎超时（10s）")
         return JSONResponse(
@@ -451,10 +466,10 @@ async def api_cancel():
     if _current_task and not _current_task.done():
         _current_task.cancel()
     tracker.cancel()
-    # 取消任务后重置工程锚点，允许用户开始新一首作品
-    daw = _state.get("daw")
-    if daw:
-        daw.unlock_project()
+    # 注意：取消任务不解锁工程锚点。
+    # 取消只代表「停止当前 AI 循环/流水线」，不等于「放弃当前作品」——
+    # 用户可能只是想中止当前 AI 步骤，工程仍然保留，可以继续创作或重新跑。
+    # 若确实要放弃工程开始新一首作品，应显式调 POST /api/project/reset。
     return {"ok": True}
 
 
