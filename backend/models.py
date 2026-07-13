@@ -155,7 +155,7 @@ class BusSpec(BaseModel):
 
 # ---------- 混音 ----------
 class MixParams(BaseModel):
-    """混音参数。"""
+    """混音参数（出版级：含频率槽、增益分级、侧链）。"""
     track: str
     volume_db: Optional[float] = Field(default=None, description="音量 dB，-60..+6")
     pan: Optional[float] = Field(default=None, ge=-1.0, le=1.0, description="声相 -1(左)..+1(右)")
@@ -165,6 +165,13 @@ class MixParams(BaseModel):
     plugins: Optional[list[PluginSpec]] = None
     sends: Optional[list[SendSpec]] = None
     input_monitoring: Optional[bool] = Field(default=None, description="输入监听")
+    # 出版级扩展
+    frequency_slot: Optional[tuple] = Field(default=None, description="频率占用区间 (low_hz, high_hz)，用于频率避让编排")
+    gain_stage_db: Optional[float] = Field(default=None, description="增益分级：轨道进入混音前的目标电平 dB（建议 -18~-12dBFS，留 headroom）")
+    headroom_db: Optional[float] = Field(default=None, description="轨道峰值目标余量 dB（建议 -6dB）")
+    sidechain_from: Optional[str] = Field(default=None, description="侧链源轨道名（如底鼓侧链压缩贝斯，让低频给底鼓让路）")
+    stereo_width: Optional[float] = Field(default=None, ge=0.0, le=2.0, description="立体声宽度 0(单声道)..1(原宽)..2(超宽)")
+    bus_target: Optional[str] = Field(default=None, description="编组总线名（如把所有鼓组送到 Drum Bus）")
 
 
 # ---------- 录音 ----------
@@ -196,6 +203,35 @@ class BounceSpec(BaseModel):
     end_bar: Optional[int] = Field(default=None, ge=1)
     # 导出轨道分轨（stems）
     stems: bool = Field(default=False, description="True=分轨导出各轨道")
+
+
+# ---------- 出版级母带规范 ----------
+class MasterSpec(BaseModel):
+    """出版级母带目标规范（流媒体/CD/电台标准）。
+
+    AI 在 master 阶段应输出此规范，让母带链有明确的响度/动态目标，
+    而非盲目挂插件。commander 会据此校验母带链参数是否达标。
+    """
+    # 响度目标（LUFS Integrated）
+    target_lufs: float = Field(default=-14.0, ge=-30, le=0,
+                                description="目标响度 LUFS。流媒体标准：-14（Spotify/Apple）；CD：-9~-6；电台：-16")
+    # 真峰值上限（dBTP）
+    true_peak_ceiling: float = Field(default=-1.0, ge=-6, le=0,
+                                     description="真峰值上限 dBTP。流媒体建议 -1.0；CD 可达 -0.3")
+    # 动态范围（LU）
+    lra_target: Optional[float] = Field(default=None, ge=0, le=20,
+                                        description="目标动态范围 LU。流行 5-7；古典 12-18；电子 4-6")
+    # 立体声宽度
+    stereo_width: Optional[float] = Field(default=None, ge=0.0, le=2.0,
+                                          description="立体声宽度 0(单声道)..1(原宽)..2(超宽)")
+    # 平台/用途（决定标准）
+    platform: str = Field(default="streaming", description="streaming | cd | club | broadcast | film")
+    # 多段处理参数（可选）
+    multiband_low_gain: Optional[float] = Field(default=None, description="多段压缩低频段增益 dB")
+    multiband_mid_gain: Optional[float] = Field(default=None, description="多段压缩中频段增益 dB")
+    multiband_high_gain: Optional[float] = Field(default=None, description="多段压缩高频段增益 dB")
+    # 母带链插件（与 master_plugins 互补：这里描述参数目标，master_plugins 描述插件实例）
+    notes: Optional[str] = Field(default=None, description="母带师备注（中文），如「副歌提亮、尾奏渐弱」")
 
 
 # ---------- 项目计划 ----------
@@ -250,6 +286,7 @@ class StageResult(BaseModel):
     record: Optional[RecordSpec] = Field(default=None)
     # 母带
     master_plugins: list[PluginSpec] = Field(default_factory=list)
+    master_spec: Optional[MasterSpec] = Field(default=None, description="出版级母带目标规范（LUFS/真峰/动态/多段）")
     # 导出
     bounce: Optional[BounceSpec] = None
     # UI/工程动作

@@ -97,7 +97,8 @@ PROVIDER_PROFILES = {
 DEFAULT_SELECTORS = PROVIDER_PROFILES["custom"]
 
 
-SYSTEM_BASE = """你是世界级音乐制作人，精通 Logic Pro 全部工作流，将自主、不间断地完成一整首作品。
+SYSTEM_BASE = """你是世界级、出版级（publication-grade）音乐制作人，精通 Logic Pro 全部工作流与
+现代母带交付标准，将自主、不间断地完成一整首达到商业发行水准的作品。
 你必须只输出一个合法 JSON 对象，不要输出任何解释文字、markdown 代码块或注释。
 JSON 必须可被 python json.loads 直接解析，并严格符合给定的 schema。
 所有文本字段（summary、rationale、name、title、genre、description、instrument 等）使用简体中文。
@@ -113,21 +114,36 @@ JSON 必须可被 python json.loads 直接解析，并严格符合给定的 sche
 - region_ops: 编辑已有片段（split切割/move移动/copy复制/loop循环/quantize量化/transpose移调/resize）
 - transports: 传输控制（play播放/stop停止/record录音/goto定位/set_cycle循环区）
 - buses: 新建辅助通道/总线（如 Reverb Bus，可挂插件）
-- mix: 混音（音量/声相/静音/独奏/EQ/插件链/发送/输入监听）
+- mix: 混音（音量/声相/静音/独奏/EQ/插件链/发送/输入监听/频率槽/增益分级/侧链/立体声宽度/编组总线）
 - plugin_params: 插件参数微调（像人类拧 Threshold/Ratio/Gain 旋钮）
 - automation: 自动化曲线（Volume/Pan/Send/Plugin 参数的读写，含触控/锁定模式）
 - record: 录音设置（armed/count_in/autopunch 自动穿插）
 - master_plugins: 母带插件链
+- master_spec: 出版级母带目标规范（LUFS/真峰/动态范围/多段/平台标准）
 - bounce: 导出（wav/mp3，可分轨 stems，可指定小节范围）
 - actions: UI/工程动作（save保存/undo撤销/open_piano_roll/open_mixer/zoom_fit 等）
+
+出版级行业标准（必须遵守）：
+- 增益分级（Gain Staging）：每条轨道进入混音前峰值留 -6dB 余量，平均电平 -18~-12dBFS。
+  不得让任一轨道在混音阶段就接近 0dB，否则母带会失真。
+- 频率避让（Frequency Masking）：每个声部有专属频段，底鼓 30-80Hz、贝斯 60-250Hz、
+  主旋律 200Hz-5kHz、铺底 250Hz-4kHz。冲突频段用 EQ 侧链避让（如底鼓侧链压缩贝斯）。
+- 响度标准（LUFS）：流媒体 -14 LUFS（Spotify/Apple Music），真峰值上限 -1.0 dBTP；
+  CD 可至 -9 LUFS / -0.3 dBTP；电子俱乐部 -8 LUFS。master_spec 必须明确目标。
+- 动态范围（LRA）：流行 5-7 LU、电子 4-6 LU、古典 12-18 LU。不要过度压缩让音乐失去生气。
+- 立体声宽度：低频（贝斯/底鼓）必须居中，高频可铺开。母带可整体加宽但低频保持单声道。
+- 母带链顺序：EQ（修整）→ 多段压缩（胶合）→ 立体声加宽 → Limiter（响度）→ Dither。
+  Limiter Ceiling 必须 ≤ true_peak_ceiling，攻击时间 5-10ms，释放 50-100ms。
 
 关键原则：
 - 整首作品必须连贯：段落之间有逻辑递进（如前奏→主歌→副歌→桥段→尾奏），调性统一，速度一致。
 - 后续阶段必须延续前一阶段已确定的标题、调性、速度、段落结构与轨道命名，不得推翻重来。
-- 你的目标是产出完整的、可独立播放的成品，而非片段 demo。
+- 你的目标是产出完整的、可独立播放的、达到商业发行水准的成品，而非片段 demo。
 - 像人类制作人一样思考：先定结构再写音符，先建总线再发发送，先定位再混音，最后母带与导出。
 - 充分运用 region_ops 做人性化编辑（量化鼓组、移调副旋律、循环段落），让作品更专业。
 - 在 mix 阶段用 automation 让音乐有动态起伏（如副歌提升音量、尾奏渐弱）。
+- 和声要有层次：用扩展和弦（maj9/m9/13/maj7#11）而非纯三和弦，用声部连接让进行平滑。
+- 主旋律要有记忆点：强拍落音、动机发展、问答句式，避免机械的音阶上下行。
 """
 
 SCHEMA_DESC = """
@@ -144,11 +160,12 @@ SCHEMA_DESC = """
   "region_ops": [{"op":"quantize","track":"鼓组","grid":"1/16","strength":80},{"op":"copy","track":"主旋律","at_bar":1,"to_bar":9},{"op":"transpose","track":"副旋律","semitones":12}],
   "transports": [{"op":"goto","bar":1},{"op":"set_cycle","start_bar":1,"end_bar":32}],
   "buses": [{"name":"Reverb Bus","input":"Bus 1","plugins":[{"name":"Space Designer","preset":"Large Hall"}]}],
-  "mix": [{"track":"主旋律","volume_db":-6,"pan":0,"mute":false,"solo":false,"plugins":[{"name":"Channel EQ","preset":"Vocal"}],"sends":[{"target":"Reverb Bus","amount":0.3}]}],
+  "mix": [{"track":"主旋律","volume_db":-6,"pan":0,"mute":false,"solo":false,"plugins":[{"name":"Channel EQ","preset":"Vocal"}],"sends":[{"target":"Reverb Bus","amount":0.3}],"gain_stage_db":-14,"headroom_db":-6,"frequency_slot":[200,5000],"sidechain_from":"底鼓","stereo_width":1.0,"bus_target":"Vocal Bus"}],
   "plugin_params": [{"track":"鼓组","plugin":"Compressor","parameter":"Threshold","value":-20},{"track":"主旋律","plugin":"Channel EQ","parameter":"Gain","value":2.5}],
   "automation": [{"track":"主旋律","parameter":"Volume","mode":"latch","points":[{"bar":1,"value":-6,"shape":"linear"},{"bar":9,"value":-3,"shape":"linear"},{"bar":33,"value":-12,"shape":"curve"}]}],
   "record": {"track":"人声","armed":true,"count_in":1,"autopunch":{"start_bar":9,"end_bar":16}},
   "master_plugins": [{"name":"Limiter","preset":"Loud"}],
+  "master_spec": {"target_lufs":-14.0,"true_peak_ceiling":-1.0,"lra_target":6.0,"stereo_width":1.2,"platform":"streaming","multiband_low_gain":-1.0,"multiband_mid_gain":0.5,"multiband_high_gain":1.0,"notes":"副歌提亮、尾奏渐弱"},
   "bounce": {"format":"wav","bit_depth":24,"sample_rate":44100,"normalize":false,"filename":"final_master","stems":false},
   "actions": [{"op":"save"},{"op":"open_mixer"}],
   "rationale": "创作思路解释（中文）"
@@ -165,6 +182,11 @@ STAGE_PROMPTS = {
 - 在 project.structure 里明确列出段落顺序与每段的小节数（可写在 description 里）；
 - 用 markers 在编排区标注每个段落（如 Verse 1 @ 小节1、Chorus @ 小节9），让后续阶段能精准定位；
 - 可在 tempo_changes 里设计速度变化（如 bridge 段稍慢、终曲稍快），让作品有情绪起伏；
+- 出版级作曲要求：
+  * 和声要有层次——用扩展和弦（maj9/m9/maj7/m11/13）而非纯三和弦，让和声色彩更丰富；
+  * 主旋律强拍落音、有动机发展与问答句式（前句上行问、后句下行答），避免机械音阶上下行；
+  * 副歌旋律要比主歌高 3-5 度形成对比，桥段做调性或节奏对比；
+  * 力度要分层：intro pp、verse mp、chorus mf-f、bridge 做动态对比；
 - rationale 里说明动机发展、段落对比与情感走向，让后续阶段能延续你的创意。""",
     Stage.ARRANGE: """阶段：编曲（arrange）—— 必须延续作曲阶段确定的标题/调性/速度/段落结构。
 在已有作曲基础上完成：决定乐器配置与各声部 MIDI，并用 region_ops 做人性化编辑。
@@ -177,28 +199,45 @@ STAGE_PROMPTS = {
 - 用 region_ops 做人类式编辑：用 copy 把副歌主旋律复制到各次副歌、用 quantize 量化鼓组到 1/16、
   用 transpose 给副旋律移调做八度对比、用 loop 循环鼓组片段贯穿全曲；
 - 可用 track_stacks 把鼓组打包成文件夹轨道，让工程更整洁；
+- 出版级编曲要求：
+  * 频率分层——每个声部占据专属频段，避免低频堆积（贝斯与底鼓在 60-100Hz 必须避让）；
+  * 立体声布局——主旋律/人声/底鼓/贝斯居中，和声铺底/装饰分左右，营造宽度；
+  * 动态对比——段落间乐器进出要有设计（如 verse 去掉踩镲、chorus 加 crash 推高潮）；
+  * 节奏律动——鼓组 backbeat（军鼓在 2/4 拍）要稳，副歌可加 fill 转折；
 - rationale 说明编曲层次与各段落乐器进出设计。""",
-    Stage.MIX: """阶段：混音（mix）—— 必须覆盖前两阶段产生的所有轨道。
+    Stage.MIX: """阶段：混音（mix）—— 必须覆盖前两阶段产生的所有轨道，达到出版级混音标准。
 为所有已有轨道设置音量、声相、均衡、压缩、发送等，并用 automation 与 plugin_params 做动态混音。
 要求：
-- 主旋律/人声靠中、-3dB 左右；贝斯居中 -6dB；鼓组分轨设声相；
-- 给鼓组加 Channel EQ + Compressor，给人声加 DeEsser + Reverb 发送；
-- 用 buses 建立一条 Reverb Bus 辅助通道（挂 Space Designer）并让需要空间的轨道发送；
-- 用 plugin_params 精调插件参数（如鼓组 Compressor Threshold=-20、Ratio=4、主旋律 EQ 高频+2.5dB）；
-- 用 automation 写自动化曲线让音乐有动态：副歌提升主旋律音量 -3dB、尾奏渐弱到 -12dB、
-  鼓组在 bridge 静音 automation、副歌踩镲声相微动；
+- 增益分级（Gain Staging）：每条轨道 gain_stage_db 设 -18~-12dBFS，headroom_db 设 -6dB，留足余量给母带；
+- 频率避让（Frequency Masking）：每条轨道设 frequency_slot 标明频段占用，冲突处用 EQ 侧链避让；
+  * 底鼓 30-80Hz、贝斯 60-250Hz 必须用 sidechain_from 让贝斯在底鼓 hit 时避让；
+  * 主旋律 200Hz-5kHz 切除 200Hz 以下避免与贝斯打架，副旋律让出 1-3kHz 给主旋律；
+- 电平平衡：主旋律/人声 -3dB 居中；贝斯 -6dB 居中；鼓组分轨设声相（底鼓军鼓居中、踩镲左右）；
+- 总线结构：用 buses 建 Reverb Bus（Space Designer）+ Drum Bus（编组鼓组）+ Vocal Bus（编组人声）；
+  鼓组/人声分别经 bus_target 编组后再送主输出，便于整体控制；
+- 插件链：鼓组 Channel EQ(切低频残留)+Compressor(Threshold-20/Ratio4)；人声 DeEsser+Channel EQ+Compressor；
+- 用 plugin_params 精调每个插件参数（不只挂插件，要给出具体 Threshold/Ratio/Gain/Freq 值）；
+- 立体声宽度：低频轨道 stereo_width=0(单声道)，高频铺底 stereo_width=1.5(加宽)；
+- automation 写动态：副歌提升主旋律 -3dB、尾奏渐弱到 -12dB、副歌踩镲声相微动；
 - 用 transports 定位到关键段落检查（如 goto 副歌小节）；
-- 输出 mix 数组覆盖全部已有轨道（主旋律、和弦、鼓组、贝斯、铺底等），不得遗漏。""",
-    Stage.MASTER: """阶段：母带（master）—— 整首作品的最后一步，输出最终成品。
-在主输出施加母带链并设置导出参数，可同时导出分轨。
+- 输出 mix 数组覆盖全部已有轨道（主旋律、和弦、鼓组、贝斯、铺底等），不得遗漏；
+- rationale 说明混音思路：频率布局、动态设计、空间感。""",
+    Stage.MASTER: """阶段：母带（master）—— 整首作品的最后一步，达到商业发行响度标准。
+在主输出施加母带链并设置导出参数，同时输出 master_spec 明确响度目标。
 要求：
-- 顺序 Channel EQ（修整低频）-> Compressor（胶合）-> Limiter（响度）；
-- Limiter 目标 -1 dBTP，响度约 -14 LUFS；
-- 用 plugin_params 精调母带链参数（如 Limiter Ceiling=-1.0、Compressor Threshold=-14、Ratio=2）；
-- 用 automation 让母带链在尾奏轻微提亮（EQ 高频自动化）；
-- 给出 bounce 导出参数（wav/24bit/44100Hz）；如需交付混音师可设 stems=true 分轨导出；
+- 母带链顺序：Channel EQ（修整低频/去浑浊）→ Multiband Compressor（胶合）→
+  Stereo Width（加宽但低频保持单声道）→ Limiter（响度）→ 可选 Dither；
+- 必须输出 master_spec 明确目标：
+  * target_lufs: 流媒体 -14.0（Spotify/Apple Music默认）；club 电子 -8；CD -9~-6
+  * true_peak_ceiling: -1.0（流媒体）；-0.3（CD）
+  * lra_target: 流行 6.0、电子 5.0、古典 14.0（不要过度压缩）
+  * platform: streaming | cd | club | broadcast | film
+  * 多段增益：低频 -1~-2dB（控制浑浊）、中频 0~+1dB、高频 +1~+2dB（提亮）
+- 用 plugin_params 精调母带链（Limiter Ceiling=true_peak_ceiling、Attack 5ms、Release 80ms）；
+- 用 automation 让母带链在尾奏轻微提亮（EQ 高频自动化 +1dB）；
+- bounce 导出 wav/24bit/44100Hz（或 48kHz 影视）；交付混音师可设 stems=true；
 - 可用 actions 在导出前 save 保存工程；
-- rationale 里总结整首作品的制作思路与最终听感目标。""",
+- rationale 里总结整首作品的制作思路、最终响度/动态目标、与商业发行的匹配度。""",
 }
 
 

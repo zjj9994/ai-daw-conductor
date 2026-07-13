@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from backend.models import (
     AutomationPoint, AutomationSpec, BounceSpec, BusSpec, MarkerSpec,
-    MixParams, PluginParamSpec, PluginSpec, ProjectPlan, RecordSpec,
+    MasterSpec, MixParams, PluginParamSpec, PluginSpec, ProjectPlan, RecordSpec,
     RegionOp, Stage, StageResult, TempoChangeSpec, TempoSpec, TrackSpec,
     TrackStackSpec, TransportAction, UIAction,
 )
@@ -220,3 +220,126 @@ def test_stage_result_default_empty_lists():
     assert r.actions == []
     assert r.record is None
     assert r.bounce is None
+
+
+# ============ 出版级混音/母带模型扩展测试 ============
+
+# ---------- MixParams 出版级扩展字段 ----------
+def test_mix_params_publication_grade_fields():
+    """出版级 MixParams 应能容纳频率槽/增益分级/headroom/侧链/立体声宽度/编组总线。"""
+    m = MixParams(
+        track="贝斯",
+        volume_db=-6, pan=0,
+        gain_stage_db=-14,
+        headroom_db=-6,
+        frequency_slot=(60, 250),
+        sidechain_from="底鼓",
+        stereo_width=0.0,    # 低频居中
+        bus_target="Drum Bus",
+    )
+    assert m.gain_stage_db == -14
+    assert m.headroom_db == -6
+    assert m.frequency_slot == (60, 250)
+    assert m.sidechain_from == "底鼓"
+    assert m.stereo_width == 0.0
+    assert m.bus_target == "Drum Bus"
+
+
+def test_mix_params_stereo_width_range():
+    """stereo_width 必须在 0-2 范围内。"""
+    with pytest.raises(ValidationError):
+        MixParams(track="x", stereo_width=3.0)
+    with pytest.raises(ValidationError):
+        MixParams(track="x", stereo_width=-0.1)
+
+
+def test_mix_params_optional_fields_default_none():
+    """出版级扩展字段默认为 None（向后兼容）。"""
+    m = MixParams(track="主旋律", volume_db=-6)
+    assert m.gain_stage_db is None
+    assert m.headroom_db is None
+    assert m.frequency_slot is None
+    assert m.sidechain_from is None
+    assert m.stereo_width is None
+    assert m.bus_target is None
+
+
+# ---------- MasterSpec 出版级母带规范 ----------
+def test_master_spec_defaults_streaming():
+    """MasterSpec 默认值应符合流媒体标准（-14 LUFS / -1.0 dBTP）。"""
+    ms = MasterSpec()
+    assert ms.target_lufs == -14.0
+    assert ms.true_peak_ceiling == -1.0
+    assert ms.platform == "streaming"
+
+
+def test_master_spec_full_publication_grade():
+    """完整的出版级母带规范（含多段处理参数）。"""
+    ms = MasterSpec(
+        target_lufs=-14.0,
+        true_peak_ceiling=-1.0,
+        lra_target=6.0,
+        stereo_width=1.2,
+        platform="streaming",
+        multiband_low_gain=-1.5,
+        multiband_mid_gain=0.5,
+        multiband_high_gain=1.5,
+        notes="副歌提亮、尾奏渐弱",
+    )
+    assert ms.target_lufs == -14.0
+    assert ms.true_peak_ceiling == -1.0
+    assert ms.lra_target == 6.0
+    assert ms.multiband_low_gain == -1.5
+    assert ms.multiband_high_gain == 1.5
+    assert "副歌" in ms.notes
+
+
+def test_master_spec_lufs_range_validation():
+    """target_lufs 必须在 -30..0 范围。"""
+    with pytest.raises(ValidationError):
+        MasterSpec(target_lufs=5.0)
+    with pytest.raises(ValidationError):
+        MasterSpec(target_lufs=-50)
+
+
+def test_master_spec_true_peak_range_validation():
+    """true_peak_ceiling 必须在 -6..0 范围。"""
+    with pytest.raises(ValidationError):
+        MasterSpec(true_peak_ceiling=1.0)
+    with pytest.raises(ValidationError):
+        MasterSpec(true_peak_ceiling=-10)
+
+
+def test_master_spec_lra_range_validation():
+    """lra_target 必须在 0..20 范围。"""
+    with pytest.raises(ValidationError):
+        MasterSpec(lra_target=25.0)
+
+
+def test_master_spec_cd_platform():
+    """CD 平台标准：-9 LUFS / -0.3 dBTP。"""
+    ms = MasterSpec(target_lufs=-9.0, true_peak_ceiling=-0.3, platform="cd")
+    assert ms.platform == "cd"
+    assert ms.target_lufs == -9.0
+    assert ms.true_peak_ceiling == -0.3
+
+
+# ---------- StageResult 包含 master_spec ----------
+def test_stage_result_with_master_spec():
+    """MASTER 阶段产出应能携带 master_spec。"""
+    r = StageResult(
+        stage=Stage.MASTER,
+        summary="母带完成",
+        master_plugins=[PluginSpec(name="Limiter", preset="Loud")],
+        master_spec=MasterSpec(target_lufs=-14.0, true_peak_ceiling=-1.0),
+        bounce=BounceSpec(format="wav", bit_depth=24, sample_rate=44100),
+    )
+    assert r.master_spec is not None
+    assert r.master_spec.target_lufs == -14.0
+    assert r.bounce.bit_depth == 24
+
+
+def test_stage_result_master_spec_default_none():
+    """非 MASTER 阶段 master_spec 应为 None。"""
+    r = StageResult(stage=Stage.COMPOSE, summary="x")
+    assert r.master_spec is None
