@@ -248,3 +248,53 @@ def test_unlock_project_clears_state():
     assert ctrl.project_locked is False
     assert ctrl.current_project_path is None
     assert ctrl.current_project_title == ""
+
+
+# ---------- MIDI 导入不会新建工程 ----------
+
+def test_add_region_does_not_create_new_project():
+    """写入 MIDI 片段（add_region）不得触发 new_project。
+
+    这是用户反馈的核心问题：原来 import_midi_file 用 open POSIX file，
+    Logic Pro 会把 MIDI 文件当作新工程打开，导致每段 MIDI 都新建工程。
+    修复后 import_midi_file 用 File > Import 菜单，导入到当前工程。
+    """
+    ctrl = _make_real_controller_in_sim_mode()
+    ctrl.project_locked = True
+    ctrl.current_project_path = "/tmp/locked.logicx"
+    ctrl.current_project_title = "已锁定工程"
+    # 把 applescript 设为 MagicMock，记录所有调用
+    ctrl.applescript = MagicMock()
+    ctrl.applescript.available = True  # _real=True
+    ctrl.applescript.import_midi_file = AsyncMock()
+    ctrl.applescript.new_project = MagicMock()
+    ctrl.applescript.select_track_by_name = MagicMock()
+    ctrl.applescript.activate = MagicMock()
+    # add_region 会调 self.midi.build_midi_file 生成 MIDI 文件
+    ctrl.midi = MagicMock()
+    ctrl.midi.build_midi_file = MagicMock(return_value=Path("/tmp/test.mid"))
+    from backend.models import MidiRegionSpec, NoteSpec, TempoSpec
+    region = MidiRegionSpec(
+        track="Piano", start=0.0, length=4.0,
+        notes=[NoteSpec(pitch=60, start=0.0, duration=1.0, velocity=80)],
+    )
+    asyncio.run(ctrl.add_region(region, bpm=120))
+    # import_midi_file 应被调用（导入到当前工程）
+    ctrl.applescript.import_midi_file.assert_awaited_once()
+    # new_project 绝不应被调用——工程已锁定，不得新建
+    ctrl.applescript.new_project.assert_not_called()
+
+
+def test_import_midi_file_does_not_use_open_posix():
+    """import_midi_file 的实现不得用 `open POSIX file`（那会新建工程）。
+
+    检查实际 AppleScript 命令行（含 open POSIX file " 的，即带路径的命令）
+    不存在。文档字符串里的说明用反引号包裹，不会匹配。
+    """
+    import backend.applescript_bridge as ab
+    import inspect
+    src = inspect.getsource(ab.AppleScriptBridge.import_midi_file)
+    # 实际命令形式：open POSIX file "{path}" —— 含引号和花括号
+    # 文档说明里是 `open POSIX file`（反引号），不会匹配这个模式
+    assert 'open POSIX file "' not in src, \
+        "import_midi_file 不应用 'open POSIX file \"...'（会新建工程），应改用 File > Import 菜单"

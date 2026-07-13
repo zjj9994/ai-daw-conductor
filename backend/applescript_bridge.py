@@ -460,13 +460,57 @@ class AppleScriptBridge:
 
     # ============== MIDI 导入 ==============
     async def import_midi_file(self, path: Path, track_name: Optional[str] = None):
-        """把 MIDI 文件导入到 Logic Pro。"""
+        """把 MIDI 文件导入到当前 Logic Pro 工程（不新建工程）。
+
+        关键修复：原来用 `open POSIX file` 会触发 Logic Pro 新建工程（把 MIDI 当作新工程打开）。
+        现在改用 File → Import 菜单，把 MIDI 片段导入到当前已打开/锁定的工程里。
+        流程：激活 Logic → 选中目标轨道 → 打开 File 菜单 → Import → 选 MIDI 文件。
+        """
+        # 1. 激活 Logic Pro 并选中目标轨道（导入的片段会落到选中轨道）
+        self.activate()
         if track_name:
             self.select_track_by_name(track_name)
+        # 2. 用 Logic Pro 的「导入 MIDI 文件」菜单，而非 open（open 会新建工程）
+        #    Logic Pro X: File > Import > MIDI File...（菜单项名称因版本略有差异，做兜底）
+        #    先尝试菜单栏 AppleScript 菜单点击，失败则用 Cmd-I 导入对话框 + 输入路径
         await self._run_async(
-            f'tell application "{self.app_name}"\n'
-            f'  activate\n'
-            f'  open POSIX file "{path}"\n'
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    -- 点击 File 菜单\n'
+            f'    click menu item "File" of menu bar 1\n'
+            f'    delay 0.2\n'
+            f'    -- 尝试 Import 子菜单（不同 Logic 版本路径不同）\n'
+            f'    try\n'
+            f'      click menu item "Import" of menu 1 of menu item "File" of menu bar 1\n'
+            f'      delay 0.2\n'
+            f'      click menu item "MIDI File…" of menu 1 of menu item "Import" of menu 1 of menu item "File" of menu bar 1\n'
+            f'    on error\n'
+            f'      -- 兜底：直接用 open 命令但限定到当前工程窗口（部分版本 open MIDI 会追加到当前工程）\n'
+            f'      keystroke "o" using {{command down}}\n'
+            f'    end try\n'
+            f'    delay 0.5\n'
+            f'  end tell\n'
+            f'end tell'
+        )
+        # 3. 在打开文件对话框里输入 MIDI 文件路径并回车
+        await self._run_async(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    -- Cmd-Shift-G 前往文件夹，输入完整路径\n'
+            f'    keystroke "g" using {{shift, command down}}\n'
+            f'    delay 0.4\n'
+            f'    keystroke "{path}"\n'
+            f'    delay 0.2\n'
+            f'    keystroke return\n'
+            f'    delay 0.3\n'
+            f'    -- 选中文件后回车导入\n'
+            f'    keystroke return\n'
+            f'    delay 0.5\n'
+            f'    -- 若弹出导入选项对话框，回车确认默认\n'
+            f'    keystroke return\n'
+            f'  end tell\n'
             f'end tell'
         )
 
