@@ -7,9 +7,9 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Stage(str, Enum):
@@ -251,10 +251,22 @@ class UIAction(BaseModel):
 
     工程一致性约束：禁止 open/close/save_as——一首音乐的所有操作指向同一个工程，
     系统在作曲阶段统一创建并保存工程，AI 不得切换/关闭工程。
+
+    兼容性：AI 经常把 actions 输出为字符串数组（如 ["open_piano_roll"]）而非
+    对象数组（[{"op":"open_piano_roll"}]）。这里用 model_validator(before) 自动
+    把字符串转为 {"op": string}，避免校验失败导致整个步骤被丢弃。
     """
     op: str = Field(description="save | undo | redo | open_piano_roll | open_mixer | open_inspector | zoom_fit | toggle_track | select_all | collapse_all（禁止 open/close/save_as）")
     path: Optional[str] = Field(default=None, description="已弃用：工程路径由系统统一管理")
     track: Optional[str] = Field(default=None, description="toggle_track/select 用")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_string_form(cls, data: Any) -> Any:
+        """AI 常输出 "open_piano_roll" 字符串而非 {"op":"open_piano_roll"}，自动转换。"""
+        if isinstance(data, str):
+            return {"op": data}
+        return data
 
 
 # ---------- 阶段结果 ----------

@@ -298,3 +298,42 @@ def test_import_midi_file_does_not_use_open_posix():
     # 文档说明里是 `open POSIX file`（反引号），不会匹配这个模式
     assert 'open POSIX file "' not in src, \
         "import_midi_file 不应用 'open POSIX file \"...'（会新建工程），应改用 File > Import 菜单"
+
+
+# ---------- UIAction 兼容字符串形式（修复 AI 输出 actions 为字符串数组） ----------
+
+def test_uiaction_accepts_string_form():
+    """UIAction 应接受字符串形式 "open_piano_roll"，自动转为 {"op":"open_piano_roll"}。
+
+    用户反馈：AI 经常输出 actions: ["open_piano_roll"]（字符串数组）
+    而非 [{"op":"open_piano_roll"}]（对象数组），导致 VisualStep 校验失败。
+    """
+    from backend.models import UIAction
+    # 字符串形式
+    a1 = UIAction.model_validate("open_piano_roll")
+    assert a1.op == "open_piano_roll"
+    # 对象形式仍兼容
+    a2 = UIAction.model_validate({"op": "save"})
+    assert a2.op == "save"
+
+
+def test_visual_step_accepts_string_actions_array():
+    """VisualStep.actions 应接受字符串数组 ["open_piano_roll"]。
+
+    这是用户实际遇到的 AI 输出格式——修复后应正确解析，不报错。
+    """
+    from backend.models import VisualStep
+    data = {
+        "observation": "截图显示 Logic Pro 处于停止状态",
+        "plan": "打开钢琴卷帘窗",
+        "done": False,
+        "transports": [{"op": "goto", "bar": 1}],
+        "tracks": [{"name": "奢华经典", "type": "software", "instrument": "E-Piano"}],
+        "actions": ["open_piano_roll"],
+        "rationale": "点击打开钢琴卷帘窗",
+    }
+    step = VisualStep.model_validate(data)
+    assert len(step.actions) == 1
+    assert step.actions[0].op == "open_piano_roll"
+    assert step.tracks[0].name == "奢华经典"
+    assert step.transports[0].op == "goto"
