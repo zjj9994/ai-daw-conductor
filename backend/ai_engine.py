@@ -742,9 +742,12 @@ class WebAIDriver:
         }""")
 
     async def close(self):
+        """关闭 Playwright 会话。加 5 秒超时防止 _pw.stop() 在浏览器无响应时永久挂起。"""
         try:
             if self._pw:
-                await self._pw.stop()
+                await asyncio.wait_for(self._pw.stop(), timeout=5.0)
+        except asyncio.TimeoutError:
+            log.warning("Playwright stop 超时（5s），强制丢弃引用。")
         except Exception:
             pass
         self._pw = self._browser = self._context = self._page = None

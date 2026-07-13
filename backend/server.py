@@ -194,7 +194,15 @@ async def update_settings(s: SettingsIn):
         await _state["ai"].close()
     if _state.get("daw"):
         _state["daw"].close()
-    _build_engines(cfg)
+    # _build_engines 含同步 IO（mkdir/mido.open_output），放线程池并加超时，避免阻塞事件循环
+    try:
+        await asyncio.wait_for(asyncio.to_thread(_build_engines, cfg), timeout=10.0)
+    except asyncio.TimeoutError:
+        log.error("重建引擎超时（10s），可能 MIDI 子系统或文件系统无响应")
+        return JSONResponse(
+            {"ok": False, "error": "重建引擎超时（10s），可能 MIDI 子系统或文件系统无响应，请检查后端日志"},
+            status_code=504,
+        )
     engine = _state["ai"]
     return {
         "ok": True,
@@ -248,7 +256,15 @@ async def api_provider_switch(s: ProviderSwitchIn):
         await _state["ai"].close()
     if _state.get("daw"):
         _state["daw"].close()
-    _build_engines(cfg)
+    # _build_engines 含同步 IO，放线程池并加超时
+    try:
+        await asyncio.wait_for(asyncio.to_thread(_build_engines, cfg), timeout=10.0)
+    except asyncio.TimeoutError:
+        log.error("切换 provider 时重建引擎超时（10s）")
+        return JSONResponse(
+            {"ok": False, "error": "重建引擎超时（10s），可能 MIDI 子系统或文件系统无响应"},
+            status_code=504,
+        )
     engine = _state["ai"]
     return {
         "ok": True,

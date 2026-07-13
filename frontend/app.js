@@ -877,11 +877,17 @@ async function switchProviderQuick(key) {
     openSettingsModal();
     return;
   }
+  const btn = $("#ai-switcher-btn");
+  if (btn) btn.disabled = true;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
     const res = await fetch("/api/provider/switch", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider: key }),
+      signal: ctrl.signal,
     });
+    clearTimeout(timer);
     const j = await res.json();
     if (!res.ok || !j.ok) {
       addLog("warn", `切换 ${p.name} 失败：${j.error || res.status}`);
@@ -891,7 +897,13 @@ async function switchProviderQuick(key) {
     updateSwitcherChip(key, j);
     addLog("info", `已切换到 ${p.name}（${j.web_url}）`, "event");
   } catch (e) {
-    addLog("warn", `切换 ${p.name} 失败：${e}`);
+    clearTimeout(timer);
+    const msg = (e && e.name === "AbortError")
+      ? `切换 ${p.name} 超时，后端可能正在重建引擎`
+      : `切换 ${p.name} 失败：${e}`;
+    addLog("warn", msg);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -951,6 +963,37 @@ $("#btn-open-login").addEventListener("click", () => {
 });
 
 $("#btn-save-settings").addEventListener("click", async () => {
+  const btn = $("#btn-save-settings");
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = "保存中…";
+  $("#set-status").textContent = "正在保存并重建引擎…";
+  try {
+    const j = await saveSettingsToBackend();
+    if (j && j.ok !== false) {
+      const p = findProvider(j.provider);
+      const providerName = p ? p.name : j.provider;
+      if (j.ai_online) {
+        $("#set-status").textContent = `已保存 · ${providerName} 网页 AI 就绪`;
+      } else {
+        $("#set-status").textContent = "已保存 · demo 模式（未安装 Playwright 或未填网址）";
+      }
+    } else if (j) {
+      $("#set-status").textContent = "✗ " + (j.error || "保存失败");
+    }
+  } catch (e) {
+    const msg = (e && e.name === "AbortError")
+      ? "保存超时（15s），后端可能正在重建引擎或浏览器无响应，请稍后重试或检查后端日志"
+      : "保存失败：" + e;
+    $("#set-status").textContent = msg;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+});
+
+// 保存设置的通用函数（带超时），供保存按钮与测试连接复用
+async function saveSettingsToBackend() {
   const form = collectSettingsForm();
   const body = {
     provider: form.provider,
@@ -960,38 +1003,44 @@ $("#btn-save-settings").addEventListener("click", async () => {
     cdp_url: form.cdp_url || undefined,
     user_data_dir: form.user_data_dir || undefined,
   };
-  saveLocalSettings(form);  // 本地持久化，下次打开自动回填
+  saveLocalSettings(form);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
     const res = await fetch("/api/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: ctrl.signal,
     });
+    clearTimeout(timer);
     const j = await res.json();
-    if (!res.ok) {
-      $("#set-status").textContent = "✗ " + (j.error || "保存失败");
-      return;
+    if (res.ok) {
+      state.selectedProvider = j.provider;
+      updateSwitcherChip(j.provider, j);
+      const p = findProvider(j.provider);
+      const providerName = p ? p.name : j.provider;
+      setChip("#chip-ai", j.ai_online, j.ai_online ? `${providerName} 就绪` : "demo 模式");
     }
-    const p = findProvider(j.provider);
-    const providerName = p ? p.name : j.provider;
-    if (j.ai_online) {
-      $("#set-status").textContent = `已保存 · ${providerName} 网页 AI 就绪`;
-    } else {
-      $("#set-status").textContent = "已保存 · demo 模式（未安装 Playwright 或未填网址）";
-    }
-    state.selectedProvider = j.provider;
-    updateSwitcherChip(j.provider, j);
-    setChip("#chip-ai", j.ai_online, j.ai_online ? `${providerName} 就绪` : "demo 模式");
+    return j;
   } catch (e) {
-    $("#set-status").textContent = "保存失败：" + e;
+    clearTimeout(timer);
+    throw e;
   }
-});
+}
 
 $("#btn-test-connect").addEventListener("click", async () => {
-  $("#set-status").textContent = "正在连接浏览器…";
-  // 先保存再测试，确保用最新配置
-  $("#btn-save-settings").click();
+  const btn = $("#btn-test-connect");
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = "连接中…";
+  $("#set-status").textContent = "正在保存并连接浏览器…";
   try {
-    const res = await fetch("/api/browser/connect", { method: "POST" });
+    // 先保存（等待完成）再测试，确保用最新配置
+    await saveSettingsToBackend();
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 30000);
+    const res = await fetch("/api/browser/connect", { method: "POST", signal: ctrl.signal });
+    clearTimeout(timer);
     const j = await res.json();
     if (j.ok) {
       const p = findProvider(state.selectedProvider);
@@ -1001,7 +1050,13 @@ $("#btn-test-connect").addEventListener("click", async () => {
       $("#set-status").textContent = "✗ " + (j.error || "连接失败");
     }
   } catch (e) {
-    $("#set-status").textContent = "✗ " + e;
+    const msg = (e && e.name === "AbortError")
+      ? "连接超时，浏览器可能无响应，请检查 Chrome 是否用 --remote-debugging-port=9222 启动"
+      : "✗ " + e;
+    $("#set-status").textContent = msg;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
   }
 });
 
