@@ -56,6 +56,8 @@ class VisualLoop:
         self._cancel = False
         # 最近一次截图路径（供前端预览）
         self._latest_screenshot: Optional[str] = None
+        # 试听-反馈历史：每条是 {bars, focus, feedback}，注入 history 让下一步 AI 能看到
+        self._audio_feedbacks: list[dict] = []
 
     def cancel(self):
         """请求取消（异步生效，下一个检查点会中断）。"""
@@ -225,6 +227,27 @@ class VisualLoop:
         if step.bounce and not self._cancel:
             await self.daw.bounce(step.bounce)
 
+        # 处理试听-反馈：让 AI 听到自己刚做的音乐，获取听觉反馈
+        if step.listen and not self._cancel:
+            audio_path = await self.daw.listen_and_capture(
+                step.listen.start_bar, step.listen.end_bar
+            )
+            if audio_path and self.ai:
+                feedback = await self.ai.listen_to_audio(audio_path, step.listen.focus,
+                                                         log_cb=self._log)
+                if feedback:
+                    # 把听觉反馈注入 history，让下一步的 AI 能看到
+                    self._audio_feedbacks.append({
+                        "bars": f"{step.listen.start_bar}-{step.listen.end_bar}",
+                        "focus": step.listen.focus,
+                        "feedback": feedback,
+                    })
+                    await self.daw.emit(kind="audio_feedback",
+                                        path=audio_path,
+                                        start_bar=step.listen.start_bar,
+                                        end_bar=step.listen.end_bar,
+                                        feedback=feedback)
+
         # UI 动作（保存/视图切换，放最后）
         for a in step.actions:
             if self._cancel: break
@@ -248,8 +271,29 @@ class VisualLoop:
         if step.actions: actions_desc.append(f"UI{[a.op for a in step.actions]}")
         if step.bounce: actions_desc.append("导出")
         if step.record: actions_desc.append(f"录音{step.record.track}")
+        if step.listen: actions_desc.append(
+            f"试听{step.listen.start_bar}-{step.listen.end_bar}小节"
+            f"（{step.listen.focus or '整体听感'}）"
+        )
         desc = "；".join(actions_desc) if actions_desc else "无动作"
         parts.append(f"[步骤{step_idx}] 计划：{step.plan}；执行：{desc}")
+        # 把累积的听觉反馈附在 history 末尾，让下一步 AI 能看到「听到了什么/有什么问题/建议」
+        if self._audio_feedbacks:
+            fb_lines = []
+            for fb in self._audio_feedbacks:
+                f = fb.get("feedback") or {}
+                heard = f.get("heard", "")
+                issues = f.get("issues", [])
+                suggestions = f.get("suggestions", [])
+                rating = f.get("rating", "")
+                line = (f"  • 小节{fb['bars']}（{fb.get('focus') or '整体听感'}）"
+                        f"评分{rating}：{heard}")
+                if issues:
+                    line += "；问题：" + "；".join(issues)
+                if suggestions:
+                    line += "；建议：" + "；".join(suggestions)
+                fb_lines.append(line)
+            parts.append("【听觉反馈（AI 听了自己做的音乐后给出的评价）】\n" + "\n".join(fb_lines))
         return "\n".join(parts)
 
     # ---------- 日志 ----------

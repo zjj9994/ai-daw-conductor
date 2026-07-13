@@ -668,6 +668,113 @@ async def api_screenshot_file(path: str):
     return FileResponse(target, media_type="image/png", filename=target.name)
 
 
+# ---------- 试听-反馈闭环：让 AI 听到自己做的音乐并给出听觉反馈 ----------
+class ListenIn(BaseModel):
+    start_bar: int = 1
+    end_bar: int = 4
+    focus: Optional[str] = None
+
+
+@app.post("/api/listen")
+async def api_listen(s: ListenIn):
+    """让 AI 试听指定小节范围并获取听觉反馈。
+
+    流程：1) 导出音频 2) 喂给多模态 AI 3) 返回听觉反馈
+    """
+    daw = _state.get("daw")
+    ai = _state.get("ai")
+    if not daw or not ai:
+        return JSONResponse({"ok": False, "error": "引擎未初始化"}, status_code=500)
+    # 1. 导出音频
+    audio_path = await daw.listen_and_capture(s.start_bar, s.end_bar)
+    if not audio_path:
+        return JSONResponse({"ok": False, "error": "音频录制失败"}, status_code=500)
+    # 2. 喂给 AI 听取
+    feedback = await ai.listen_to_audio(audio_path, s.focus)
+    # 3. 推送给前端
+    await broadcast({"type": "audio_feedback", "path": audio_path, "feedback": feedback})
+    return {"ok": True, "audio_path": audio_path, "feedback": feedback}
+
+
+# ---------- 即兴编曲模式：打破阶段流水线，AI 像人类一样随心所欲编曲 ----------
+class ImproviseIn(BaseModel):
+    goal: str = Field(description="编曲目标,如'做一首 flower dance 风的钢琴曲'")
+    max_steps: int = 30
+
+
+@app.post("/api/improvise")
+async def api_improvise(s: ImproviseIn):
+    """即兴编曲模式:让 AI 像人类一样随心所欲编曲。
+
+    与 /api/pipeline 的区别:
+    - 无固定阶段流水线
+    - AI 主动决策每一步
+    - 支持试听-反馈循环
+    - 支持随时回退
+    """
+    global _current_task
+    if _current_task and not _current_task.done():
+        return JSONResponse({"ok": False, "error": "已有任务在运行,请先取消"}, status_code=409)
+
+    daw = _state.get("daw")
+    ai = _state.get("ai")
+    if not daw or not ai:
+        return JSONResponse({"ok": False, "error": "引擎未初始化"}, status_code=500)
+
+    from backend.session_conductor import SessionConductor
+
+    async def run():
+        try:
+            conductor = SessionConductor(daw=daw, ai=ai)
+            await conductor.run_improvise_loop(s.goal, s.max_steps)
+            await broadcast({"type": "improvise_done", "steps": conductor.state.step_count})
+        except asyncio.CancelledError:
+            tracker.cancel()
+        except Exception as e:
+            log.exception("improvise 执行失败")
+            tracker.fail(str(e))
+            await broadcast({"type": "daw_event", "kind": "error", "message": str(e)})
+        finally:
+            await broadcast({"type": "daw_event", "kind": "task_finished"})
+
+    tracker.start(mode="improvise", prompt=s.goal, total=s.max_steps)
+    _current_task = asyncio.ensure_future(run())
+    return {"ok": True, "message": f"开始即兴编曲:{s.goal}"}
+
+
+class FreeActionIn(BaseModel):
+    """用户/AI 随时插入一个即兴动作。"""
+    intent: str = "用户插入的动作"
+    tracks: list = []
+    regions: list = []
+    mix: list = []
+    transports: list = []
+    actions: list = []
+    listen: Optional[dict] = None
+
+
+@app.post("/api/improvise/action")
+async def api_improvise_action(s: FreeActionIn):
+    """随时插入一个即兴动作(不启动循环,只执行一步)。
+
+    用户可以在任务运行中或空闲时插入任意操作。
+    """
+    daw = _state.get("daw")
+    if not daw:
+        return JSONResponse({"ok": False, "error": "引擎未初始化"}, status_code=500)
+
+    from backend.session_conductor import SessionConductor
+    from backend.models import FreeAction
+
+    # 转 dict 再 model_validate,兼容前端传的原始 JSON
+    data = s.model_dump()
+    action = FreeAction.model_validate(data)
+
+    conductor = SessionConductor(daw=daw)
+    summary = await conductor.execute_free_action(action)
+    return {"ok": True, "summary": summary}
+
+
 # ---------- WebSocket ----------
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):

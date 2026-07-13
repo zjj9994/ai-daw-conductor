@@ -23,7 +23,7 @@ import re
 from typing import AsyncIterator, Optional
 
 from .models import (
-    BounceSpec, MixParams, MidiRegionSpec, NoteSpec, PluginSpec,
+    BounceSpec, FreeAction, MixParams, MidiRegionSpec, NoteSpec, PluginSpec,
     ProjectPlan, SendSpec, Stage, StageResult, TempoSpec, TrackSpec,
     VisualStep,
 )
@@ -211,6 +211,48 @@ JSON 必须可被 python json.loads 直接解析，并严格符合给定的 sche
 - 主旋律要有记忆点：强拍落音、动机发展、问答句式，避免机械的音阶上下行。
 """
 
+IMPROVISE_PROMPT = """你是世界级音乐制作人,正在像人类一样即兴编曲——不是按流水线分阶段制作,而是随心所欲地创作。
+
+你的工作模式(像人类制作人):
+- 写一段旋律 → 立刻试听 → 觉得不够好就改 → 加和声 → 再试听 → 调音色 → 加鼓 → 试听 → 混音 → 试听 → 导出
+- 每一步都基于上一步的实际反馈,不是预设流程
+- 可以随时做任意操作:写旋律时可以同时调音色、加 reverb、设音量
+- 可以随时回退:不喜欢就撤销重做
+- 可以随时试听:用 listen 动作让自己听到做的音乐
+
+关键原则:
+- 【即兴创作·核心】你不受阶段约束,想做什么就做什么。写旋律时可以同时调混音,混音时可以加新旋律。
+- 【试听-反馈】每次做了重要改动后,用 listen 试听一下,根据听觉反馈决定下一步。
+  人类制作人 90% 的决策来自耳朵,你也应该这样——听完再决定改不改、怎么改。
+- 【工程一致性】整首音乐的所有操作指向同一个 Logic Pro 工程,系统已锁定工程,不要切换/关闭工程。
+- 【上下文连续】你能看到之前的操作历史和听觉反馈,基于这些决定下一步,不要重复已做的。
+- 【目标导向】你的目标是完成一首完整的、达到商业发行水准的作品,不是"执行某个阶段"。
+
+输出格式:只输出一个 JSON 对象(FreeAction),不要输出任何解释文字、markdown 代码块。
+{
+  "intent": "这一步的创作意图(中文):打算做什么、为什么",
+  "tracks": [...],           // 可选:加轨道(software/audio/drummer/aux)
+  "regions": [...],          // 可选:写 MIDI 旋律(音符/力度/时值)
+  "region_ops": [...],       // 可选:编辑片段(split/move/copy/loop/quantize/transpose/resize/crop/fade)
+  "mix": [...],              // 可选:调混音(音量/声相/EQ/插件/发送/侧链/立体声宽度)
+  "plugin_params": [...],    // 可选:拧插件旋钮(Threshold/Ratio/Gain/Freq 等)
+  "automation": [...],       // 可选:画自动化曲线(Volume/Pan/Send/Plugin 参数)
+  "transports": [...],       // 可选:传输控制(play/stop/goto/set_cycle)
+  "actions": [...],          // 可选:UI 动作(open_piano_roll/open_mixer/tool_pencil/dismiss_dialog 等)
+  "listen": {                // 可选:试听指定小节范围,获取听觉反馈
+    "start_bar": 1,
+    "end_bar": 4,
+    "focus": "主旋律亮度"    // 试听关注点
+  },
+  "undo_to": null,           // 可选:回退到第 N 步(1-based),不喜欢就重做
+  "satisfied": false,         // True=觉得作品完成,可以结束了
+  "rationale": "创作思路解释"
+}
+
+字段都是可选的,按需输出。如果只是想试听,就只输出 intent + listen。
+如果觉得作品完成,就只输出 intent="作品完成" + satisfied=true。
+"""
+
 SCHEMA_DESC = """
 返回的 JSON 结构（字段可按阶段省略不需要的）：
 {
@@ -388,7 +430,7 @@ class WebAIDriver:
         profile = PROVIDER_PROFILES.get(self.provider, DEFAULT_SELECTORS)
         self.selectors = {**profile, **(ai.get("selectors") or {})}
         self.timeout = float(ai.get("timeout", 180))
-        self.new_chat_per_stage = bool(ai.get("new_chat_per_stage", True))
+        self.new_chat_per_stage = bool(ai.get("new_chat_per_stage", False))  # 默认 False:保持上下文连续,不每阶段开新对话
         self.retries = int(ai.get("retries", 2))
 
         b = cfg.get("browser", {})
@@ -538,6 +580,92 @@ class WebAIDriver:
         if log_cb:
             await log_cb("info", f"网页 AI 回复已抓取（{len(text)} 字）")
         return text
+
+    async def listen_to_audio(self, audio_path: str, focus: Optional[str] = None,
+                              log_cb=None) -> Optional[dict]:
+        """网页 AI 听取音频（多模态：把音频文件上传给支持音频的网页 AI）。
+
+        把音频文件作为多模态输入喂给网页 AI（豆包/Kimi/Claude 等支持音频输入），
+        AI 返回听觉反馈：听到了什么、有什么问题、改进建议。
+
+        Args:
+            audio_path: 音频文件路径
+            focus: 试听关注点（如"主旋律亮度"）
+            log_cb: 日志回调
+        Returns:
+            AudioFeedback 的 dict 形式，失败返回 None
+        """
+        if not self._pw or not self._page:
+            return None
+        try:
+            from pathlib import Path
+            path = Path(audio_path).expanduser()
+            if not path.exists():
+                log.warning("音频文件不存在：%s", audio_path)
+                return None
+
+            page = await self.ensure_page()
+            if log_cb:
+                await log_cb("info", f"向网页 AI 注入音频+提示（音频 {audio_path}，关注点 {focus or '整体听感'}）...")
+
+            # 网页 AI 的文件上传：找 input[type=file] 并 set_input_files
+            # 多数网页 AI 支持上传音频文件（拖拽或点击附件按钮）
+            uploaded = False
+            try:
+                file_input = page.locator("input[type='file']").first
+                if await file_input.count():
+                    await file_input.set_input_files(str(path))
+                    # 等待音频预览/识别完成
+                    await page.wait_for_timeout(1500)
+                    uploaded = True
+                    if log_cb:
+                        await log_cb("info", "音频已上传到网页 AI。")
+            except Exception as e:
+                log.debug("input[type=file] 上传音频失败：%s", e)
+
+            # 评价请求 prompt
+            if uploaded:
+                prompt = (
+                    f"请听这段音频并评价。关注点：{focus or '整体听感'}。"
+                    "请回答：1)听到了什么（音色/动态/空间感）2)有什么问题 3)改进建议 4)评分 1-10。"
+                    '只输出 JSON：{"heard":"...","issues":["..."],"suggestions":["..."],"rating":6}'
+                )
+            else:
+                # 兜底：用文本描述让 AI 评价（降级模式，没有真正听到）
+                if log_cb:
+                    await log_cb("warn", "音频上传失败，退化为纯文本模式（AI 将无法真正听到音频）。")
+                prompt = (
+                    f"我刚导出了一段音频（指定小节范围），但因技术原因无法上传给你听。"
+                    f"请基于音乐制作经验说说如何评估{focus or '整体听感'}，"
+                    "并指出常见问题与改进建议。"
+                )
+
+            before_count = await self._assistant_msg_count(page)
+            await self._type_and_send(page, prompt)
+            await self._wait_for_completion(page, before_count, log_cb)
+            text = await self._last_assistant_text(page)
+            if not text:
+                return None
+            if log_cb:
+                await log_cb("info", f"网页 AI 听觉反馈已抓取（{len(text)} 字）")
+
+            # 从回复中提取 JSON
+            match = re.search(r'\{[^{}]*"heard"[^{}]*\}', text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group())
+                except Exception:
+                    pass
+            # 提取失败时把全文当 heard 返回
+            return {
+                "heard": text[:500],
+                "issues": [],
+                "suggestions": [],
+                "rating": 6,
+            }
+        except Exception as e:
+            log.warning("网页 AI 听取音频失败：%s", e)
+            return None
 
     async def _upload_image(self, page, image_path: str, log_cb=None) -> bool:
         """把图片上传到网页 AI 输入框。返回是否成功。"""
@@ -797,6 +925,61 @@ class AIEngine:
         if not self._use_web:
             return True
         return await self.driver.reconnect(log_cb=log_cb)
+
+    async def listen_to_audio(self, audio_path: str, focus: Optional[str] = None,
+                              log_cb=None) -> Optional[dict]:
+        """让 AI 听取音频文件并给出听觉反馈。
+
+        把音频文件作为多模态输入喂给网页 AI（豆包/Kimi/Claude 等支持音频输入），
+        AI 返回听觉反馈：听到了什么、有什么问题、改进建议。
+
+        Args:
+            audio_path: 音频文件路径
+            focus: 试听关注点（如"主旋律亮度"）
+            log_cb: 日志回调
+        Returns:
+            AudioFeedback 的 dict 形式，失败返回 None
+        """
+        # 默认实现：用文本描述让 AI 评价（降级模式，没有真正听）
+        # 子类 WebAIDriver 会覆盖此方法，真正把音频上传给多模态 AI
+        if not self._use_web:
+            # demo 模式无网页 AI，无法真正听音频
+            return None
+        return await self.driver.listen_to_audio(audio_path, focus=focus, log_cb=log_cb)
+
+    async def generate_free_action(self, goal: str, context: str, step: int) -> Optional[FreeAction]:
+        """AI 主动决策下一步即兴动作。
+
+        与 generate_stage 的区别:
+        - 无 stage 概念,AI 自由决定做什么
+        - 上下文包含操作历史 + 听觉反馈
+        - AI 可以 satisfied=True 表示完成
+
+        demo 模式(无网页 AI)返回 None,由调用方决定如何处理。
+        """
+        if not self._use_web:
+            # demo 模式:无网页 AI,无法做即兴决策
+            return None
+        prompt = f"""{IMPROVISE_PROMPT}
+
+{context}
+
+当前是第 {step} 步。请决定下一步做什么。
+如果觉得作品已经完成,设 satisfied=true。
+
+用户目标:{goal}
+"""
+        try:
+            raw = await self.driver.chat(prompt, new_chat=False)
+            data = self._extract_json(raw)
+            if data is None:
+                log.warning("generate_free_action: 未能从回复中解析 JSON(前80字:%r)",
+                            raw[:80] if raw else "")
+                return None
+            return FreeAction.model_validate(data)
+        except Exception as e:
+            log.warning("generate_free_action 失败: %s", e)
+            return None
 
     async def evaluate_stage(
         self,

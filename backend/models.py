@@ -269,6 +269,30 @@ class UIAction(BaseModel):
         return data
 
 
+# ---------- 试听-反馈（让 AI 听到自己做的音乐） ----------
+class ListenAction(BaseModel):
+    """让 AI 试听指定小节范围的音频，获取听觉反馈。
+
+    这是让 AI 像人类一样"做一段→听→改"即兴编曲的核心能力。
+    AI 输出此动作后，系统会：
+    1. 用 bounce 导出指定小节范围的音频
+    2. 把音频喂给多模态 AI 听取
+    3. AI 返回听觉反馈（太闷/太响/低频糊等）
+    4. 反馈注入下一步的上下文，指导 AI 改进
+    """
+    start_bar: int = Field(default=1, ge=1, description="试听起始小节")
+    end_bar: int = Field(default=4, ge=1, description="试听结束小节")
+    focus: Optional[str] = Field(default=None, description="试听关注点（如'主旋律亮度'/'低频清晰度'/'副歌爆发力'）")
+
+
+class AudioFeedback(BaseModel):
+    """AI 听完音频后的听觉反馈。"""
+    heard: str = Field(description="听到了什么（中文）：音色、动态、空间感等")
+    issues: list[str] = Field(default_factory=list, description="发现的问题（如'主旋律太闷'/'低频糊'/'副歌不够爆'）")
+    suggestions: list[str] = Field(default_factory=list, description="改进建议（如'给主旋律加 8kHz 高频'/'贝斯切高通'）")
+    rating: int = Field(default=6, ge=1, le=10, description="整体听感评分 1-10")
+
+
 # ---------- 阶段结果 ----------
 class StageResult(BaseModel):
     """单个阶段的完整动作清单（AI 输出）。
@@ -307,6 +331,8 @@ class StageResult(BaseModel):
     bounce: Optional[BounceSpec] = None
     # UI/工程动作
     actions: list[UIAction] = Field(default_factory=list, description="保存/撤销/视图切换等")
+    # 试听-反馈（让 AI 听到自己做的音乐）
+    listen: Optional[ListenAction] = Field(default=None, description="试听指定小节范围并获取听觉反馈")
     rationale: Optional[str] = Field(default=None, description="创作思路解释")
 
 
@@ -338,4 +364,48 @@ class VisualStep(BaseModel):
     record: Optional[RecordSpec] = Field(default=None)
     bounce: Optional[BounceSpec] = Field(default=None)
     actions: list[UIAction] = Field(default_factory=list)
+    # 试听-反馈（让 AI 听到自己做的音乐）
+    listen: Optional[ListenAction] = Field(default=None, description="试听指定小节范围并获取听觉反馈")
     rationale: Optional[str] = Field(default=None, description="为什么这么做（中文）")
+
+
+# ---------- 即兴编曲（打破阶段流水线） ----------
+class FreeAction(BaseModel):
+    """即兴动作:AI 像人类制作人一样随时做任意操作,不受阶段约束。
+
+    与 StageResult 的区别:
+    - 无 stage 字段:AI 不需要声明"我现在是哪个阶段"
+    - 可包含任意字段组合:写旋律的同时可以调音色、加 reverb、设音量
+    - 支持 listen:试听后基于听觉反馈决定下一步
+    - 支持 undo_to:回退到之前的某个版本
+
+    这是让 AI 像人类一样"随心所欲编曲"的核心模型——
+    人类写一段旋律时脑子里没有"阶段"概念,想到什么就做什么。
+    """
+    intent: str = Field(description="这一步的创作意图(中文):打算做什么、为什么")
+    # 工程级(允许任意时刻调整,不像 StageResult 限制只有 compose 能建工程)
+    project: Optional[ProjectPlan] = None
+    # 所有操作字段(与 StageResult 相同,但无 stage 约束)
+    tempo_changes: list[TempoChangeSpec] = Field(default_factory=list)
+    markers: list[MarkerSpec] = Field(default_factory=list)
+    tracks: list[TrackSpec] = Field(default_factory=list)
+    track_stacks: list[TrackStackSpec] = Field(default_factory=list)
+    regions: list[MidiRegionSpec] = Field(default_factory=list)
+    region_ops: list[RegionOp] = Field(default_factory=list)
+    transports: list[TransportAction] = Field(default_factory=list)
+    mix: list[MixParams] = Field(default_factory=list)
+    buses: list[BusSpec] = Field(default_factory=list)
+    plugin_params: list[PluginParamSpec] = Field(default_factory=list)
+    automation: list[AutomationSpec] = Field(default_factory=list)
+    record: Optional[RecordSpec] = None
+    master_plugins: list[PluginSpec] = Field(default_factory=list)
+    master_spec: Optional[MasterSpec] = None
+    bounce: Optional[BounceSpec] = None
+    actions: list[UIAction] = Field(default_factory=list)
+    # 试听-反馈(让 AI 听到自己做的音乐)
+    listen: Optional[ListenAction] = None
+    # 回退到之前的版本(支持"我不喜欢这段,重做")
+    undo_to: Optional[int] = Field(default=None, description="回退到第 N 步(1-based),留空不回退")
+    # 是否觉得整体满意(可以结束了)
+    satisfied: bool = Field(default=False, description="True=觉得作品完成,可以结束了")
+    rationale: Optional[str] = None

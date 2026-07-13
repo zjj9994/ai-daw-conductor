@@ -537,6 +537,34 @@ class DAWController:
                         stems=bounce.stems)
         return out
 
+    # ============== 试听-反馈 ==============
+    async def listen_and_capture(self, start_bar: int = 1, end_bar: int = 4) -> Optional[str]:
+        """试听指定小节范围并录制音频，供 AI 听取反馈。
+
+        实现：用 bounce 导出指定小节范围的临时音频文件。
+        这是让 AI 像人类一样"做一段→听→改"即兴编曲的核心能力。
+
+        Returns: 音频文件路径，失败返回 None
+        """
+        await self.log("info", f"试听录制：第 {start_bar}-{end_bar} 小节")
+        if not self._real:
+            await self.emit(kind="listen_simulated", start_bar=start_bar, end_bar=end_bar)
+            return None
+        try:
+            from backend.audio_capture import capture_audio_segment
+            audio_path = await capture_audio_segment(self, start_bar, end_bar)
+            if audio_path:
+                await self.emit(kind="audio_captured", path=str(audio_path),
+                                start_bar=start_bar, end_bar=end_bar)
+                await self.log("info", f"音频已录制： {audio_path}")
+                return str(audio_path)
+            else:
+                await self.log("warning", "音频录制失败")
+                return None
+        except Exception as e:
+            await self.log("error", f"试听录制异常: {e}")
+            return None
+
     # ============== UI 动作 ==============
     async def ui_action(self, action: UIAction):
         """执行 UI/工程级动作（保存/撤销/视图切换等）。
