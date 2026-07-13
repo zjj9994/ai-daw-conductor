@@ -71,12 +71,12 @@ class TransportAction(BaseModel):
 # ---------- 片段操作 ----------
 class RegionOp(BaseModel):
     """对已有片段的操作（像人类在编排区拖拽编辑）。"""
-    op: str = Field(description="split | join | move | copy | delete | loop | resize | quantize | transpose | crop")
+    op: str = Field(description="split | join | move | copy | delete | loop | resize | quantize | transpose | crop | fade_in | fade_out | crossfade")
     track: Optional[str] = Field(default=None, description="目标轨道名")
     # split/join/move/copy 用拍或小节定位
     at_bar: Optional[int] = Field(default=None, ge=1, description="操作位置小节")
     at_beat: Optional[float] = Field(default=None, description="操作位置拍")
-    to_bar: Optional[int] = Field(default=None, ge=1, description="move/copy 目标小节")
+    to_bar: Optional[int] = Field(default=None, ge=1, description="move/copy/crop 目标小节")
     to_beat: Optional[float] = Field(default=None, description="move/copy 目标拍")
     # quantize
     grid: Optional[str] = Field(default=None, description="量化网格：1/16 | 1/8 | 1/4 | 1/8T | 1/16T")
@@ -85,8 +85,8 @@ class RegionOp(BaseModel):
     semitones: Optional[int] = Field(default=None, description="移调半音数（正=升，负=降）")
     # loop
     loop_count: Optional[int] = Field(default=None, ge=1, description="循环次数")
-    # resize
-    new_length_beats: Optional[float] = Field(default=None, description="resize 后长度（拍）")
+    # resize / fade_in / fade_out / crossfade
+    new_length_beats: Optional[float] = Field(default=None, description="resize/fade 长度（拍）")
 
 
 # ---------- 自动化 ----------
@@ -256,7 +256,7 @@ class UIAction(BaseModel):
     对象数组（[{"op":"open_piano_roll"}]）。这里用 model_validator(before) 自动
     把字符串转为 {"op": string}，避免校验失败导致整个步骤被丢弃。
     """
-    op: str = Field(description="save | undo | redo | open_piano_roll | open_mixer | open_inspector | zoom_fit | toggle_track | select_all | collapse_all | dismiss_dialog（禁止 open/close/save_as）")
+    op: str = Field(description="save | undo | redo | open_piano_roll | open_mixer | open_inspector | open_smart_controls | open_score_editor | open_step_editor | zoom_fit | toggle_track | select_all | collapse_all | dismiss_dialog | tool_pencil | tool_scissors | tool_eraser | tool_text | tool_zoom | tool_solo | tool_mute | tool_fade（禁止 open/close/save_as）")
     path: Optional[str] = Field(default=None, description="已弃用：工程路径由系统统一管理")
     track: Optional[str] = Field(default=None, description="toggle_track/select 用")
 

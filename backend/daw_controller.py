@@ -349,6 +349,14 @@ class DAWController:
             elif op.op == "transpose":
                 await self._call_applescript("select_track_by_name", op.track)
                 await self._call_applescript("transpose_selected", op.semitones or 0)
+            elif op.op == "crop":
+                await self._call_applescript("crop_region", op.track, op.at_bar or 1, op.to_bar or (op.at_bar or 1) + 4)
+            elif op.op == "fade_in":
+                await self._call_applescript("fade_in_region", op.track, op.at_bar or 1, op.new_length_beats or 2.0)
+            elif op.op == "fade_out":
+                await self._call_applescript("fade_out_region", op.track, op.at_bar or 1, op.new_length_beats or 2.0)
+            elif op.op == "crossfade":
+                await self._call_applescript("crossfade_regions", op.track, op.at_bar or 1, op.new_length_beats or 1.0)
         await self.emit(kind="region_op", op=op.op, track=op.track,
                         at_bar=op.at_bar, to_bar=op.to_bar)
 
@@ -379,6 +387,24 @@ class DAWController:
             if params.sends:
                 for s in params.sends:
                     await self._call_applescript("add_send_to_bus", params.track, s.target, s.amount)
+            # Channel EQ 多段参数（MixParams.eq）
+            if params.eq:
+                eq_bands = []
+                if isinstance(params.eq, list):
+                    eq_bands = params.eq
+                elif isinstance(params.eq, dict):
+                    # 兼容 {"bands": [...]} 或直接把 dict 当单段
+                    eq_bands = params.eq.get("bands", [params.eq])
+                if eq_bands:
+                    await self._call_applescript("set_channel_eq_params", params.track, eq_bands)
+            # 侧链压缩（MixParams.sidechain_from）
+            if params.sidechain_from:
+                # 找该轨道上的压缩器插件设侧链源
+                # 先用默认 plugin 名 "Compressor"，未来可从 plugins 列表推断
+                await self._call_applescript("set_sidechain", params.track, "Compressor", params.sidechain_from)
+            # 立体声宽度（MixParams.stereo_width）
+            if params.stereo_width is not None:
+                await self._call_applescript("set_stereo_width", params.track, params.stereo_width)
         else:
             await self.log("warn", "模拟模式：跳过混音器实际操作。")
         await self.emit(kind="mix_applied", track=params.track,
@@ -408,11 +434,18 @@ class DAWController:
 
     # ============== 自动化 ==============
     async def apply_automation(self, auto: AutomationSpec):
-        """写自动化曲线。"""
+        """写自动化曲线。
+
+        现在真正写入 points：设模式 → 显示自动化 lane → 用 add_automation_points 逐点写入。
+        """
         await self.log("info", f"自动化：{auto.track}/{auto.parameter}（{len(auto.points)} 个点，模式={auto.mode}）")
         if self._real:
             await self._call_applescript("set_automation_mode", auto.track, auto.mode)
             await self._call_applescript("show_automation_for_track", auto.track, auto.parameter)
+            # 真正写入自动化节点（之前这里完全缺失，只设模式不写点）
+            if auto.points:
+                pts_data = [{"bar": p.bar, "value": p.value, "shape": p.shape} for p in auto.points]
+                await self._call_applescript("add_automation_points", auto.track, auto.parameter, pts_data)
         await self.emit(kind="automation", track=auto.track, parameter=auto.parameter,
                         mode=auto.mode, point_count=len(auto.points))
 
@@ -517,8 +550,13 @@ class DAWController:
             "save": "保存", "save_as": "另存为", "open": "打开", "close": "关闭",
             "undo": "撤销", "redo": "重做", "open_piano_roll": "打开钢琴卷帘",
             "open_mixer": "打开混音器", "open_inspector": "打开检查器",
+            "open_smart_controls": "打开智能控制", "open_score_editor": "打开乐谱编辑器",
+            "open_step_editor": "打开步进编辑器",
             "zoom_fit": "缩放适配", "toggle_track": "切换轨道", "select_all": "全选",
             "collapse_all": "折叠所有堆栈", "dismiss_dialog": "关闭弹窗",
+            "tool_pencil": "画笔工具", "tool_scissors": "剪刀工具", "tool_eraser": "橡皮工具",
+            "tool_text": "文字工具", "tool_zoom": "放大镜工具", "tool_solo": "独奏工具",
+            "tool_mute": "静音工具", "tool_fade": "渐变工具",
         }
         # 守卫：禁止切换/关闭工程，保证所有操作指向同一个工程
         if action.op in ("open", "close"):
@@ -553,6 +591,17 @@ class DAWController:
                 await self._call_applescript("open_mixer")
             elif action.op == "open_inspector":
                 await self._call_applescript("open_inspector")
+            elif action.op == "open_smart_controls":
+                await self._call_applescript("open_smart_controls")
+            elif action.op == "open_score_editor":
+                await self._call_applescript("open_score_editor")
+            elif action.op == "open_step_editor":
+                await self._call_applescript("open_step_editor")
+            elif action.op.startswith("tool_"):
+                # 工具切换：tool_pencil / tool_scissors / tool_eraser / tool_text /
+                # tool_zoom / tool_solo / tool_mute / tool_fade
+                tool_name = action.op[5:]  # 去掉 "tool_" 前缀
+                await self._call_applescript("select_tool", tool_name)
             elif action.op == "zoom_fit":
                 await self._call_applescript("zoom_fit")
             elif action.op == "select_all":

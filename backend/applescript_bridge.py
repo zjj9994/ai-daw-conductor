@@ -774,39 +774,177 @@ class AppleScriptBridge:
         self._send_key(KEY_COMMANDS["delete_regions"], delay=0.2)
 
     def loop_region(self, track_name: str, bar: int, loop_count: int):
-        """循环片段。选中后设置循环次数（通过片段参数）。"""
+        """设置片段循环次数。
+
+        用 Region Inspector 的 Loops 数值框设置循环次数。
+        """
         self.select_track_by_name(track_name)
+        # 先选中该位置的片段
         self.goto_bar(bar)
-        # 打开片段检查器设循环
+        # 用 Region Inspector 设 Loops
         self._run(
             f'tell application "System Events"\n'
             f'  tell process "{self.app_name}"\n'
             f'    set frontmost to true\n'
-            f'    keystroke "l" using {{control, option, command}}\n'  # 循环片段
             f'    delay 0.2\n'
+            f'    try\n'
+            f'      -- Region Inspector 的 Loops 文本框\n'
+            f'      set loopsField to first text field of window 1 whose description contains "Loops"\n'
+            f'      set focused of loopsField to true\n'
+            f'      delay 0.1\n'
+            f'      keystroke "{loop_count}"\n'
+            f'      delay 0.1\n'
+            f'      keystroke return\n'
+            f'    end try\n'
             f'  end tell\n'
             f'end tell'
         )
 
     def resize_region(self, track_name: str, bar: int, new_length_beats: float):
-        """调整片段长度。通过拖拽右边缘较难脚本化，这里用键命令近似。"""
+        """调整片段长度。
+
+        用 Region Inspector 的 Length 数值框设置长度（拍）。
+        """
         self.select_track_by_name(track_name)
         self.goto_bar(bar)
-        # 选中后用 Option-拖拽或键命令调整
         self._run(
             f'tell application "System Events"\n'
             f'  tell process "{self.app_name}"\n'
             f'    set frontmost to true\n'
-            f'    keystroke "r" using {{control, option, command}}\n'  # 调整大小
             f'    delay 0.2\n'
+            f'    try\n'
+            f'      -- Region Inspector 的 Length 文本框\n'
+            f'      set lenField to first text field of window 1 whose description contains "Length"\n'
+            f'      set focused of lenField to true\n'
+            f'      delay 0.1\n'
+            f'      keystroke "{new_length_beats}"\n'
+            f'      delay 0.1\n'
+            f'      keystroke return\n'
+            f'    end try\n'
             f'  end tell\n'
             f'end tell'
         )
 
+    def crop_region(self, track_name: str, bar: int, end_bar: int):
+        """裁剪片段到指定范围（删除范围外的部分）。
+
+        用 Region Inspector 的 Crop 数值框或菜单 Edit > Trim > Crop。
+        """
+        self.select_track_by_name(track_name)
+        self.goto_bar(bar)
+        self._run(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    delay 0.2\n'
+            f'    try\n'
+            f'      set cropField to first text field of window 1 whose description contains "Crop"\n'
+            f'      set focused of cropField to true\n'
+            f'      delay 0.1\n'
+            f'      keystroke "{end_bar - bar}"\n'
+            f'      delay 0.1\n'
+            f'      keystroke return\n'
+            f'    end try\n'
+            f'  end tell\n'
+            f'end tell'
+        )
+
+    def fade_in_region(self, track_name: str, bar: int, length_beats: float = 2.0):
+        """给片段加淡入。用 Region Inspector 的 Fade In 数值框。"""
+        self.select_track_by_name(track_name)
+        self.goto_bar(bar)
+        self._run(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    delay 0.2\n'
+            f'    try\n'
+            f'      set fadeField to first text field of window 1 whose description contains "Fade In"\n'
+            f'      set focused of fadeField to true\n'
+            f'      delay 0.1\n'
+            f'      keystroke "{length_beats}"\n'
+            f'      delay 0.1\n'
+            f'      keystroke return\n'
+            f'    end try\n'
+            f'  end tell\n'
+            f'end tell'
+        )
+
+    def fade_out_region(self, track_name: str, bar: int, length_beats: float = 2.0):
+        """给片段加淡出。用 Region Inspector 的 Fade Out 数值框。"""
+        self.select_track_by_name(track_name)
+        self.goto_bar(bar)
+        self._run(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    delay 0.2\n'
+            f'    try\n'
+            f'      set fadeField to first text field of window 1 whose description contains "Fade Out"\n'
+            f'      set focused of fadeField to true\n'
+            f'      delay 0.1\n'
+            f'      keystroke "{length_beats}"\n'
+            f'      delay 0.1\n'
+            f'      keystroke return\n'
+            f'    end try\n'
+            f'  end tell\n'
+            f'end tell'
+        )
+
+    def crossfade_regions(self, track_name: str, bar: int, length_beats: float = 1.0):
+        """交叉淡化两个相邻片段。选中两个片段后用菜单 Edit > Fade > Crossfade。"""
+        self.select_track_by_name(track_name)
+        self.goto_bar(bar)
+        # 选中两个相邻片段（Shift+点击）
+        self._send_key("key code 125 using {shift down}", delay=0.2)  # Shift+下箭头扩展选区
+        # 菜单 Edit > Fade > Crossfade
+        self._menu_click(["Edit", "Fade", "Crossfade"], delay=0.3)
+
     # ============== MIDI 编辑（钢琴卷帘） ==============
     def quantize_selected_regions(self, grid: str = "1/16", strength: int = 100):
-        """量化选中片段的 MIDI 音符。"""
-        self._send_key(KEY_COMMANDS["quantize"], delay=0.3)
+        """量化选中片段，指定网格和强度。
+
+        grid: 1/16 | 1/8 | 1/4 | 1/16T | 1/8T 等
+        strength: 0-100，100=完全量化，<100=部分量化（人性化）
+        """
+        # 方案1：用 Region Inspector 的 Quantize 下拉框和 Q-Strength
+        self._run(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    delay 0.2\n'
+            f'    try\n'
+            f'      -- Quantize 下拉框\n'
+            f'      set qMenu to first pop up button of window 1 whose description contains "Quantize"\n'
+            f'      click qMenu\n'
+            f'      delay 0.2\n'
+            f'      -- 尝试精确匹配\n'
+            f'      try\n'
+            f'        click menu item "{grid}" of menu 1 of qMenu\n'
+            f'      on error\n'
+            f'        -- 模糊匹配\n'
+            f'        repeat with mi in menu items of menu 1 of qMenu\n'
+            f'          if name of mi contains "{grid}" then\n'
+            f'            click mi\n'
+            f'            exit repeat\n'
+            f'          end if\n'
+            f'        end repeat\n'
+            f'      end try\n'
+            f'      delay 0.1\n'
+            f'      -- Q-Strength 滑块（如果 strength < 100）\n'
+            f'      if {strength} < 100 then\n'
+            f'        try\n'
+            f'          set qStrSlider to first slider of window 1 whose description contains "Strength"\n'
+            f'          set value of qStrSlider to {strength}\n'
+            f'        end try\n'
+            f'      end if\n'
+            f'    on error\n'
+            f'      -- 兜底：键命令 Cmd-Q 量化（用上次设的网格）\n'
+            f'      keystroke "q" using {{command down}}\n'
+            f'    end try\n'
+            f'  end tell\n'
+            f'end tell'
+        )
 
     def quantize_strong(self):
         self._send_key(KEY_COMMANDS["quantize_strong"], delay=0.3)
@@ -971,47 +1109,314 @@ class AppleScriptBridge:
         self._send_key('keystroke "b" using {control down}', delay=0.2)
 
     def set_plugin_parameter(self, track_name: str, plugin_name: str, parameter: str, value: float):
-        """设置插件参数。Logic 参数自动化路径较复杂，这里通过插件窗口 UI 操作。
+        """设置插件参数（像人类拧 Threshold/Ratio/Gain 旋钮）。
 
-        parameter 路径如 'Threshold' / 'Ratio' / 'Gain'。
+        通过 AX accessibility 遍历插件窗口 UI 元素，按参数名匹配并设置值。
         """
         self.select_track_by_name(track_name)
-        self.open_plugin_for_selected_track()
-        # 通过参数名定位（最佳努力，依赖插件 UI）
+        # 转义 parameter 中的特殊字符（双引号、反斜杠）
+        param_esc = parameter.replace('\\', '\\\\').replace('"', '\\"')
+        # 方案1：AppleScript 字典直接打开插件窗口
+        opened = self._run(
+            f'tell application "{self.app_name}"\n'
+            f'  try\n'
+            f'    open plugin editor of (first track whose name is "{track_name}") plugin 1\n'
+            f'    return "ok"\n'
+            f'  on error\n'
+            f'    return "fallback"\n'
+            f'  end try\n'
+            f'end tell'
+        )
+        if opened.strip() != "ok":
+            # 兜底：键命令打开插件编辑器
+            self._send_key('keystroke "e" using {command down}', delay=0.5)
+        # 用 AX 遍历找参数并设置
         self._run(
             f'tell application "System Events"\n'
             f'  tell process "{self.app_name}"\n'
             f'    set frontmost to true\n'
-            f'    keystroke "p" using {{command, option}}\n'
             f'    delay 0.3\n'
-            f'    keystroke "{plugin_name}"\n'
-            f'    delay 0.3\n'
-            f'    keystroke return\n'
+            f'    -- 遍历插件窗口的 UI 元素找参数\n'
+            f'    set pluginWindow to window 1\n'
+            f'    set paramSet to false\n'
+            f'    try\n'
+            f'      -- 优先找 AXSlider（旋钮通常是 slider）\n'
+            f'      repeat with elem in UI elements of pluginWindow\n'
+            f'        try\n'
+            f'          set elemDesc to description of elem\n'
+            f'          set elemTitle to title of elem\n'
+            f'          if elemDesc contains "{param_esc}" or elemTitle contains "{param_esc}" then\n'
+            f'            set value of elem to {value}\n'
+            f'            set paramSet to true\n'
+            f'            exit repeat\n'
+            f'          end if\n'
+            f'        end try\n'
+            f'      end repeat\n'
+            f'    end try\n'
+            f'    -- 兜底：找 AXTextField（数值输入框）\n'
+            f'    if not paramSet then\n'
+            f'      try\n'
+            f'        repeat with elem in UI elements of pluginWindow\n'
+            f'          try\n'
+            f'            set elemDesc to description of elem\n'
+            f'            if elemDesc contains "{param_esc}" then\n'
+            f'              set focused of elem to true\n'
+            f'              delay 0.1\n'
+            f'              keystroke "{value}"\n'
+            f'              delay 0.1\n'
+            f'              keystroke return\n'
+            f'              set paramSet to true\n'
+            f'              exit repeat\n'
+            f'            end if\n'
+            f'          end try\n'
+            f'        end repeat\n'
+            f'      end try\n'
+            f'    end if\n'
+            f'    -- 关闭插件窗口\n'
             f'    delay 0.2\n'
+            f'    keystroke "w" using {{command down}}\n'
+            f'  end tell\n'
+            f'end tell'
+        )
+
+    def set_channel_eq_params(self, track_name: str, eq_bands: list):
+        """设置 Channel EQ 多段参数。
+
+        eq_bands: [{band: 1, freq: 200, gain: -3, q: 1.0}, ...]
+        band 1-8 对应 Logic Channel EQ 的 8 个频段。
+        """
+        self.select_track_by_name(track_name)
+        # 打开 Channel EQ（假设已挂载，打开插件窗口）
+        self._run(
+            f'tell application "{self.app_name}"\n'
+            f'  try\n'
+            f'    open plugin editor of (first track whose name is "{track_name}") plugin 1\n'
+            f'  end try\n'
+            f'end tell'
+        )
+        # 对每个频段设置参数
+        for band in eq_bands:
+            band_num = band.get("band", 1)
+            freq = band.get("freq", 1000)
+            gain = band.get("gain", 0)
+            q = band.get("q", 1.0)
+            # 用 AX 遍历找频段的 Freq/Gain/Q 文本框并设置
+            self._run(
+                f'tell application "System Events"\n'
+                f'  tell process "{self.app_name}"\n'
+                f'    set frontmost to true\n'
+                f'    delay 0.2\n'
+                f'    try\n'
+                f'      -- 频段 {band_num} 的 Freq/Gain/Q 通常有对应的 AXTextField\n'
+                f'      -- 用 description 或 title 匹配 "Band {band_num} Frequency" 等\n'
+                f'      set bandElems to every UI element of window 1 whose description contains "Band {band_num}"\n'
+                f'      repeat with elem in bandElems\n'
+                f'        try\n'
+                f'          set elemDesc to description of elem\n'
+                f'          if elemDesc contains "Frequency" then\n'
+                f'            set focused of elem to true\n'
+                f'            keystroke "{freq}"\n'
+                f'            keystroke return\n'
+                f'          else if elemDesc contains "Gain" then\n'
+                f'            set focused of elem to true\n'
+                f'            keystroke "{gain}"\n'
+                f'            keystroke return\n'
+                f'          else if elemDesc contains "Q" then\n'
+                f'            set focused of elem to true\n'
+                f'            keystroke "{q}"\n'
+                f'            keystroke return\n'
+                f'          end if\n'
+                f'        end try\n'
+                f'      end repeat\n'
+                f'    end try\n'
+                f'  end tell\n'
+                f'end tell'
+            )
+        # 关闭插件窗口
+        self._send_key('keystroke "w" using {command down}', delay=0.2)
+
+    def set_sidechain(self, track_name: str, plugin_name: str, source_track: str):
+        """设置压缩器的侧链源（如底鼓侧链压缩贝斯）。
+
+        在 Compressor 插件窗口的 Side Chain 下拉选源轨道。
+        """
+        self.select_track_by_name(track_name)
+        # 打开插件窗口
+        self._run(
+            f'tell application "{self.app_name}"\n'
+            f'  try\n'
+            f'    open plugin editor of (first track whose name is "{track_name}") plugin 1\n'
+            f'  end try\n'
+            f'end tell'
+        )
+        # 在插件窗口找 Side Chain 下拉菜单并选源轨道
+        self._run(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    delay 0.3\n'
+            f'    try\n'
+            f'      -- 找 Side Chain 弹出菜单\n'
+            f'      set sideChainMenu to first pop up button of window 1 whose description contains "Side Chain"\n'
+            f'      click sideChainMenu\n'
+            f'      delay 0.2\n'
+            f'      -- 选源轨道\n'
+            f'      click menu item "{source_track}" of menu 1 of sideChainMenu\n'
+            f'    end try\n'
+            f'    delay 0.2\n'
+            f'    keystroke "w" using {{command down}}\n'
+            f'  end tell\n'
+            f'end tell'
+        )
+
+    def set_stereo_width(self, track_name: str, width: float):
+        """设置立体声宽度（0=单声道, 1=原宽, 2=超宽）。
+
+        通过挂载 Direction Mixer 插件并设 Width 参数。
+        """
+        self.select_track_by_name(track_name)
+        # Direction Mixer 是 Logic 自带插件，直接挂载并设参数
+        # 假设已挂载，打开插件窗口设 Width
+        self._run(
+            f'tell application "{self.app_name}"\n'
+            f'  try\n'
+            f'    open plugin editor of (first track whose name is "{track_name}") plugin 1\n'
+            f'  end try\n'
+            f'end tell'
+        )
+        self._run(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    delay 0.3\n'
+            f'    try\n'
+            f'      repeat with elem in UI elements of window 1\n'
+            f'        try\n'
+            f'          set elemDesc to description of elem\n'
+            f'          if elemDesc contains "Width" then\n'
+            f'            set value of elem to {width}\n'
+            f'            exit repeat\n'
+            f'          end if\n'
+            f'        end try\n'
+            f'      end repeat\n'
+            f'    end try\n'
+            f'    delay 0.2\n'
+            f'    keystroke "w" using {{command down}}\n'
             f'  end tell\n'
             f'end tell'
         )
 
     # ============== 自动化 ==============
     def set_automation_mode(self, track_name: str, mode: str):
-        """设置轨道自动化模式：read | touch | latch | write | off。"""
+        """设置轨道自动化模式：read | touch | latch | write | off。
+
+        用 AX accessibility 点击轨道头的 Automation Mode 按钮并选模式。
+        """
         self.select_track_by_name(track_name)
-        # Logic 用键命令切换自动化模式
-        mode_keys = {
-            "read": 'keystroke "r" using {control, option, command}',
-            "touch": 'keystroke "t" using {control, option, command}',
-            "latch": 'keystroke "l" using {control, option, command}',
-            "write": 'keystroke "w" using {control, option, command}',
-            "off": 'keystroke "o" using {control, option, command}',
-        }
-        key = mode_keys.get(mode, mode_keys["read"])
-        self._send_key(key, delay=0.2)
+        mode_label = {
+            "read": "Read", "touch": "Touch", "latch": "Latch",
+            "write": "Write", "off": "Off",
+        }.get(mode.lower(), "Read")
+        self._run(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    delay 0.2\n'
+            f'    try\n'
+            f'      -- 找轨道头的 Automation Mode 按钮（通常是 pop up button）\n'
+            f'      set trackHeader to first track whose name is "{track_name}"\n'
+            f'      set autoBtn to first pop up button of trackHeader whose description contains "Automation"\n'
+            f'      click autoBtn\n'
+            f'      delay 0.2\n'
+            f'      click menu item "{mode_label}" of menu 1 of autoBtn\n'
+            f'    end try\n'
+            f'  end tell\n'
+            f'end tell'
+        )
 
     def show_automation_for_track(self, track_name: str, parameter: str = "Volume"):
-        """显示某轨道某参数的自动化曲线。"""
+        """显示某轨道某参数的自动化曲线。
+
+        parameter: Volume | Pan | Send1 | Send2 | Plugin:插件名:参数名 等。
+        """
         self.select_track_by_name(track_name)
-        # 按 A 显示自动化
-        self._send_key('keystroke "a" using {command down}', delay=0.2)
+        # 按 A 显示自动化 lane
+        self._send_key('keystroke "a" using {command down}', delay=0.3)
+        # 用 AX 在自动化 lane 的参数下拉菜单选具体参数
+        self._run(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    delay 0.2\n'
+            f'    try\n'
+            f'      -- 自动化 lane 的参数选择菜单\n'
+            f'      set paramMenu to first pop up button of window 1 whose description contains "Automation Parameter"\n'
+            f'      click paramMenu\n'
+            f'      delay 0.2\n'
+            f'      -- 尝试精确匹配菜单项\n'
+            f'      try\n'
+            f'        click menu item "{parameter}" of menu 1 of paramMenu\n'
+            f'      on error\n'
+            f'        -- 模糊匹配：遍历菜单项找包含关键词的\n'
+            f'        set paramPlain to "{parameter}"\n'
+            f'        repeat with mi in menu items of menu 1 of paramMenu\n'
+            f'          if name of mi contains paramPlain then\n'
+            f'            click mi\n'
+            f'            exit repeat\n'
+            f'          end if\n'
+            f'        end repeat\n'
+            f'      end try\n'
+            f'    end try\n'
+            f'  end tell\n'
+            f'end tell'
+        )
+
+    def add_automation_points(self, track_name: str, parameter: str, points: list):
+        """在自动化曲线上添加节点（像人类用铅笔在自动化 lane 上点节点）。
+
+        points: [{bar: 1.0, value: 0.0, shape: "linear"}, ...]
+        bar 是小节位置（可带小数），value 是参数值，shape 是曲线形状。
+
+        实现策略：
+        1. 选中轨道 + 显示该参数的自动化 lane
+        2. 定位播放头到每个 bar 位置（goto_bar）
+        3. 用键命令 Cmd-Ctrl-Opt-A 创建自动化节点（Logic 默认）
+        4. 用上下箭头调整节点值（最佳努力，精确值需要 AX 操作）
+        """
+        self.show_automation_for_track(track_name, parameter)
+        for pt in points:
+            bar = pt.get("bar", 1.0)
+            value = pt.get("value", 0.0)
+            # 定位播放头到节点位置
+            self.goto_bar(int(bar), (bar - int(bar)) * 4 + 1)
+            # 创建自动化节点（键命令，Logic 默认无单键，用菜单 Edit > Create Automation Point）
+            self._menu_click(["Edit", "Create Automation Point"], delay=0.2)
+            # 最佳努力：用 AX 设置节点值
+            self._run(
+                f'tell application "System Events"\n'
+                f'  tell process "{self.app_name}"\n'
+                f'    set frontmost to true\n'
+                f'    delay 0.1\n'
+                f'    try\n'
+                f'      -- 选中的自动化节点通常有 AXSlider 可调值\n'
+                f'      set autoPt to first slider of window 1 whose selected is true\n'
+                f'      set value of autoPt to {value}\n'
+                f'    end try\n'
+                f'  end tell\n'
+                f'end tell'
+            )
+
+    def set_automation_curve(self, track_name: str, parameter: str, points: list):
+        """批量写入自动化曲线（像人类用铅笔连续点节点画曲线）。
+
+        比 add_automation_points 更高效：先清空已有节点，再一次性写入所有节点。
+        """
+        self.show_automation_for_track(track_name, parameter)
+        # 先选中所有已有节点并删除
+        self._send_key('keystroke "a" using {command down}', delay=0.1)
+        self._send_key("key code 51", delay=0.1)  # Delete
+        # 逐个创建节点
+        self.add_automation_points(track_name, parameter, points)
 
     # ============== 标记 ==============
     def add_marker(self, name: str, bar: int):
@@ -1062,6 +1467,131 @@ class AppleScriptBridge:
 
     def open_inspector(self):
         self._send_key(KEY_COMMANDS["open_inspector"], delay=0.3)
+
+    def open_smart_controls(self):
+        """打开智能控制窗口（Cmd-7）。
+
+        Smart Controls 是 Logic X 推荐的快速调音色路径，可映射多个插件参数到旋钮。
+        """
+        self._send_key('keystroke "7" using {command down}', delay=0.3)
+
+    def open_score_editor(self):
+        """打开乐谱编辑器（Cmd-8）。"""
+        self._send_key('keystroke "8" using {command down}', delay=0.3)
+
+    def open_step_editor(self):
+        """打开步进编辑器（Cmd-9 或菜单 View > Show Step Editor）。"""
+        # 先尝试键命令
+        opened = self._run(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    try\n'
+            f'      keystroke "9" using {{command down}}\n'
+            f'      delay 0.3\n'
+            f'      return "ok"\n'
+            f'    on error\n'
+            f'      return "fallback"\n'
+            f'    end try\n'
+            f'  end tell\n'
+            f'end tell'
+        )
+        if opened.strip() != "ok":
+            # 兜底：菜单 View > Show Step Editor
+            self._menu_click(["View", "Show Step Editor"], delay=0.3)
+
+    def select_tool(self, tool_name: str):
+        """切换工具（像人类按 Esc 后选工具）。
+
+        tool_name: pencil | scissors | eraser | text | zoom | solo | mute | fade
+        Logic 工具栏：按 Esc 打开，然后按对应字母。
+        """
+        tool_keys = {
+            "pencil": "p",       # 画笔
+            "scissors": "x",     # 剪刀（Logic 默认 X 是混音器，需先 Esc）
+            "eraser": "e",       # 橡皮
+            "text": "t",         # 文字
+            "zoom": "z",         # 放大镜
+            "solo": "s",         # 独奏
+            "mute": "m",         # 静音
+            "fade": "f",         # 渐变
+        }
+        key = tool_keys.get(tool_name.lower(), "p")
+        # 先按 Esc 打开工具栏（如果当前不在工具选择模式）
+        self._send_key("key code 53", delay=0.1)  # Esc
+        # 然后按字母选工具
+        self._send_key(f'keystroke "{key}"', delay=0.2)
+
+    def set_project_audio_settings(self, sample_rate: int = 44100, bit_depth: int = 24):
+        """设置工程音频参数（采样率/位深）。
+
+        通过 File > Project Settings > Audio 菜单打开设置对话框。
+        """
+        self._menu_click(["File", "Project Settings", "Audio..."], delay=0.5)
+        # 在设置对话框设采样率
+        self._run(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    delay 0.3\n'
+            f'    try\n'
+            f'      -- 找采样率下拉框\n'
+            f'      set srMenu to first pop up button of window 1 whose description contains "Sample Rate"\n'
+            f'      click srMenu\n'
+            f'      delay 0.2\n'
+            f'      click menu item "{sample_rate}" of menu 1 of srMenu\n'
+            f'    end try\n'
+            f'    try\n'
+            f'      -- 找位深下拉框\n'
+            f'      set bdMenu to first pop up button of window 1 whose description contains "Bit Depth"\n'
+            f'      click bdMenu\n'
+            f'      delay 0.2\n'
+            f'      click menu item "{bit_depth}" of menu 1 of bdMenu\n'
+            f'    end try\n'
+            f'    delay 0.1\n'
+            f'    keystroke return\n'  # 确认
+            f'  end tell\n'
+            f'end tell'
+        )
+
+    def set_master_target(self, target_lufs: float = -14.0, true_peak_ceiling: float = -1.0,
+                          lra_target: Optional[float] = None, stereo_width: Optional[float] = None):
+        """设置母带目标参数（LUFS/真峰/动态范围/立体声宽度）。
+
+        假设已挂载 Limiter，打开插件窗口设 Ceiling = true_peak_ceiling。
+        target_lufs 用于 AI 反馈迭代（通过响度表读数），这里只设 Ceiling。
+        """
+        self.select_master_track()
+        # 打开 master 轨道的第一个插件（通常是 Limiter）
+        self._run(
+            f'tell application "{self.app_name}"\n'
+            f'  try\n'
+            f'    open plugin editor of (first track whose name is "Stereo Out") plugin 1\n'
+            f'  end try\n'
+            f'end tell'
+        )
+        # 用 AX 找 Ceiling 参数并设值
+        self._run(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set frontmost to true\n'
+            f'    delay 0.3\n'
+            f'    try\n'
+            f'      repeat with elem in UI elements of window 1\n'
+            f'        try\n'
+            f'          set elemDesc to description of elem\n'
+            f'          if elemDesc contains "Ceiling" then\n'
+            f'            set value of elem to {true_peak_ceiling}\n'
+            f'            exit repeat\n'
+            f'          end if\n'
+            f'        end try\n'
+            f'      end repeat\n'
+            f'    end try\n'
+            f'    delay 0.2\n'
+            f'    keystroke "w" using {{command down}}\n'  # 关闭插件窗口
+            f'  end tell\n'
+            f'end tell'
+        )
 
     def zoom_fit(self):
         self._send_key(KEY_COMMANDS["zoom_fit"], delay=0.3)

@@ -170,7 +170,7 @@ JSON 必须可被 python json.loads 直接解析，并严格符合给定的 sche
 - tracks: 创建轨道（software/audio/drummer/aux，可设颜色/图标/编组/冻结/隐藏）
 - track_stacks: 创建轨道堆栈（folder/summing，把相关轨道打包）
 - regions: 写入 MIDI 片段（音符/力度/时值）
-- region_ops: 编辑已有片段（split切割/move移动/copy复制/loop循环/quantize量化/transpose移调/resize）
+- region_ops: 编辑已有片段（split切割/move移动/copy复制/loop循环带次数/quantize量化带网格和强度/transpose移调/resize改长度/crop裁剪/fade_in淡入/fade_out淡出/crossfade交叉淡化）
 - transports: 传输控制（play播放/stop停止/record录音/goto定位/set_cycle循环区）
 - buses: 新建辅助通道/总线（如 Reverb Bus，可挂插件）
 - mix: 混音（音量/声相/静音/独奏/EQ/插件链/发送/输入监听/频率槽/增益分级/侧链/立体声宽度/编组总线）
@@ -180,7 +180,7 @@ JSON 必须可被 python json.loads 直接解析，并严格符合给定的 sche
 - master_plugins: 母带插件链
 - master_spec: 出版级母带目标规范（LUFS/真峰/动态范围/多段/平台标准）
 - bounce: 导出（wav/mp3，可分轨 stems，可指定小节范围）
-- actions: UI/工程动作（save保存/undo撤销/open_piano_roll/open_mixer/zoom_fit/dismiss_dialog关弹窗 等）
+- actions: UI/工程动作（save保存/undo撤销/open_piano_roll/open_mixer/open_inspector/open_smart_controls/open_score_editor/open_step_editor/zoom_fit/dismiss_dialog关弹窗/tool_pencil画笔/tool_scissors剪刀/tool_eraser橡皮/tool_fade渐变 等）
 
 出版级行业标准（必须遵守）：
 - 增益分级（Gain Staging）：每条轨道进入混音前峰值留 -6dB 余量，平均电平 -18~-12dBFS。
