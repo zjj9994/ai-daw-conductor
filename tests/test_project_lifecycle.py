@@ -52,6 +52,8 @@ def _make_real_controller_in_sim_mode() -> DAWController:
     ctrl.applescript.available = False  # 模拟模式：_real=False
     ctrl.current_project_path = "/tmp/test.logicx"
     ctrl.current_project_title = "测试"
+    ctrl.project_locked = True  # 模拟已锁定状态（ui_action 守卫需要）
+    ctrl._track_index = {}
     return ctrl
 
 
@@ -132,19 +134,22 @@ def test_ui_action_save_as_uses_system_path():
 # ---------- 工程路径记录 ----------
 
 def test_create_project_records_path():
-    """create_project 后 current_project_path 应被记录，供后续阶段引用。"""
+    """create_project 后 current_project_path 应被记录并加锁，供后续阶段引用。"""
     ctrl = _make_real_controller_in_sim_mode()
     with tempfile.TemporaryDirectory() as td:
         ctrl.project_dir = Path(td)
         ctrl.current_project_path = None
         ctrl.current_project_title = ""
-        asyncio.run(ctrl.create_project(
+        ctrl.project_locked = False  # 从未锁定开始，允许 create_project
+        ok = asyncio.run(ctrl.create_project(
             TempoSpec(bpm=120, time_signature="4/4", key="C minor"),
             title="我的歌",
         ))
+        assert ok is True
         assert ctrl.current_project_path is not None
         assert "我的歌.logicx" in ctrl.current_project_path
         assert ctrl.current_project_title == "我的歌"
+        assert ctrl.project_locked is True  # 创建后应自动加锁
 
 
 def test_create_project_sanitizes_unsafe_title():
@@ -154,6 +159,7 @@ def test_create_project_sanitizes_unsafe_title():
         ctrl.project_dir = Path(td)
         ctrl.current_project_path = None
         ctrl.current_project_title = ""
+        ctrl.project_locked = False
         asyncio.run(ctrl.create_project(
             TempoSpec(bpm=120), title='bad/name:"*?',
         ))
@@ -163,3 +169,82 @@ def test_create_project_sanitizes_unsafe_title():
         filename = Path(path).stem
         for ch in '/\\:*?"<>|':
             assert ch not in filename, f"文件名 {filename} 含非法字符 {ch}"
+
+
+# ---------- 工程锁：防止意外创建其他工程 ----------
+
+def test_create_project_refused_when_already_locked():
+    """已有锁定工程时，再次 create_project 应被拒绝，不创建新工程。"""
+    ctrl = _make_real_controller_in_sim_mode()
+    # 已锁定状态（_make_real_controller_in_sim_mode 默认 project_locked=True）
+    original_path = ctrl.current_project_path
+    original_title = ctrl.current_project_title
+    ctrl.project_dir = Path(tempfile.mkdtemp())  # _lock_project 在 create_project 内先调用，project_dir 需存在
+    ok = asyncio.run(ctrl.create_project(
+        TempoSpec(bpm=140), title="另一首歌",
+    ))
+    assert ok is False  # 应被拒绝
+    # 工程锚点不应改变
+    assert ctrl.current_project_path == original_path
+    assert ctrl.current_project_title == original_title
+
+
+def test_mutating_ops_refused_without_project():
+    """无锁定工程时，修改操作（如 ensure_track/add_region/apply_mix/bounce）应被跳过。"""
+    ctrl = _make_real_controller_in_sim_mode()
+    ctrl.project_locked = False
+    ctrl.current_project_path = None
+    from backend.models import TrackSpec, MidiRegionSpec, NoteSpec, MixParams, BounceSpec
+    # ensure_track 应跳过
+    asyncio.run(ctrl.ensure_track(TrackSpec(name="Test", type="software")))
+    assert "Test" not in ctrl._track_index  # 未创建
+    # bounce 应返回 None
+    out = asyncio.run(ctrl.bounce(BounceSpec(filename="test", format="wav")))
+    assert out is None
+
+
+def test_open_existing_project_locks_anchor():
+    """open_existing_project 应锁定工程锚点。"""
+    ctrl = _make_real_controller_in_sim_mode()
+    ctrl.project_locked = False
+    ctrl.current_project_path = None
+    with tempfile.TemporaryDirectory() as td:
+        # 创建一个假的 .logicx 文件
+        fake = Path(td) / "我的工程.logicx"
+        fake.write_bytes(b"fake logicx")
+        ok = asyncio.run(ctrl.open_existing_project(str(fake)))
+        assert ok is True
+        assert ctrl.project_locked is True
+        assert ctrl.current_project_title == "我的工程"
+
+
+def test_open_existing_project_refused_when_locked():
+    """已有锁定工程时，open_existing_project 应被拒绝。"""
+    ctrl = _make_real_controller_in_sim_mode()
+    # 已锁定状态
+    original_path = ctrl.current_project_path
+    with tempfile.TemporaryDirectory() as td:
+        fake = Path(td) / "other.logicx"
+        fake.write_bytes(b"fake")
+        ok = asyncio.run(ctrl.open_existing_project(str(fake)))
+        assert ok is False
+        assert ctrl.current_project_path == original_path  # 未切换
+
+
+def test_open_existing_project_rejects_nonexistent():
+    """不存在的文件应被拒绝。"""
+    ctrl = _make_real_controller_in_sim_mode()
+    ctrl.project_locked = False
+    ok = asyncio.run(ctrl.open_existing_project("/nonexistent/path.logicx"))
+    assert ok is False
+    assert ctrl.project_locked is False
+
+
+def test_unlock_project_clears_state():
+    """unlock_project 应清空锁定状态，允许开始新一首作品。"""
+    ctrl = _make_real_controller_in_sim_mode()
+    assert ctrl.project_locked is True
+    ctrl.unlock_project()
+    assert ctrl.project_locked is False
+    assert ctrl.current_project_path is None
+    assert ctrl.current_project_title == ""

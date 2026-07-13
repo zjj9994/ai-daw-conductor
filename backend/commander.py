@@ -52,8 +52,11 @@ class Commander:
         # 1. 工程 —— 只有作曲阶段才允许新建工程，确保一首音乐的所有操作指向同一个工程
         if result.project:
             if result.stage == Stage.COMPOSE:
-                await self.daw.create_project(result.project.tempo, result.project.title)
-                bpm = result.project.tempo.bpm
+                # create_project 已加锁：若工程已锁定（如自主模式重做 compose），拒绝重建并返回 False
+                created = await self.daw.create_project(result.project.tempo, result.project.title)
+                if created:
+                    bpm = result.project.tempo.bpm
+                # created=False 时工程已锁定，沿用原工程，不动 bpm
             else:
                 # 非 compose 阶段若 AI 误输出 project 字段，忽略以防意外新建/切换工程
                 await self.daw.log(

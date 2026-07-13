@@ -187,6 +187,19 @@
       </div>
       <p class="modal-hint">本项目<b>不使用 API</b>，而是复用你已登录的网页端 AI。点击下方任一 AI 卡片即可选中（或在顶栏快捷切换），然后在 Chrome 里打开对应网址登录后点「测试连接」。Playwright 未安装时自动降级为内置 demo 生成器。</p>
 
+      <div class="project-lock-box" id="project-lock-box">
+        <div class="project-lock-status" id="project-lock-status">
+          <span class="lock-dot" id="lock-dot"></span>
+          <span id="lock-text">工程未锁定</span>
+        </div>
+        <div class="project-lock-actions">
+          <input type="text" id="project-open-path" placeholder="~/Music/AI-DAW-Conductor/projects/xxx.logicx" />
+          <button class="ghost-btn" id="btn-open-project" title="先打开一个已有工程作为锚点，之后所有操作都锁定在这个工程里">打开工程</button>
+          <button class="ghost-btn" id="btn-reset-project" title="重置工程锚点，允许开始新一首作品">重置</button>
+        </div>
+        <p class="project-lock-hint">严格规则：先打开/创建一个工程作为锚点，之后所有作曲/编曲/混音/母带/导出操作都锁定在这个工程里，禁止创建其他工程。</p>
+      </div>
+
       <label class="form-label">选择网页端 AI</label>
       <div class="provider-grid" id="provider-grid"></div>
       <div id="provider-hint" class="field-hint"></div>

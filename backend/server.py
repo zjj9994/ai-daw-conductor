@@ -130,13 +130,69 @@ async def index():
 async def health():
     ai = _state.get("ai")
     browser = _state.get("cfg", {}).get("browser", {})
+    daw = _state.get("daw")
     return {
         "ok": True,
         "ai_online": ai.online if ai else False,
         "browser_mode": browser.get("mode", "cdp"),
         "browser_connected": bool(ai and ai.driver.connected),
         "daw_platform": "macos" if __import__("platform").system() == "Darwin" else "simulated",
+        "project_locked": bool(daw and daw.project_locked),
+        "current_project_path": (daw.current_project_path if daw else None),
+        "current_project_title": (daw.current_project_title if daw else ""),
     }
+
+
+# ---------- 工程锚点管理：先打开一个工程，之后所有操作都锁定在这个工程里 ----------
+class ProjectOpenIn(BaseModel):
+    path: str  # .logicx 文件的绝对路径
+
+
+@app.post("/api/project/open")
+async def api_project_open(p: ProjectOpenIn):
+    """打开一个已有的 .logicx 工程作为锚点。
+
+    严格规则：一首音乐的所有操作指向同一个工程。
+    若已有锁定工程，拒绝切换；若工程文件不存在或非 .logicx，返回错误。
+    """
+    daw = _state.get("daw")
+    if not daw:
+        return JSONResponse({"ok": False, "error": "DAW 控制器未就绪"}, status_code=503)
+    ok = await daw.open_existing_project(p.path)
+    if not ok:
+        return JSONResponse(
+            {"ok": False, "error": f"无法打开工程：{p.path}（可能已锁定其他工程，或文件不存在/非 .logicx）"},
+            status_code=400,
+        )
+    return {
+        "ok": True,
+        "project_path": daw.current_project_path,
+        "project_title": daw.current_project_title,
+        "project_locked": daw.project_locked,
+    }
+
+
+@app.get("/api/project/status")
+async def api_project_status():
+    """查询当前工程锚点状态（前端据此显示是否已锁定工程）。"""
+    daw = _state.get("daw")
+    return {
+        "locked": bool(daw and daw.project_locked),
+        "path": daw.current_project_path if daw else None,
+        "title": daw.current_project_title if daw else "",
+    }
+
+
+@app.post("/api/project/reset")
+async def api_project_reset():
+    """重置工程锚点（取消任务后清空锁定状态，允许开始新一首作品）。
+
+    注意：不会关闭 Logic Pro 里实际打开的工程，只清空后端的锁定状态。
+    """
+    daw = _state.get("daw")
+    if daw:
+        daw.unlock_project()
+    return {"ok": True, "locked": False}
 
 
 class SettingsIn(BaseModel):
@@ -395,6 +451,10 @@ async def api_cancel():
     if _current_task and not _current_task.done():
         _current_task.cancel()
     tracker.cancel()
+    # 取消任务后重置工程锚点，允许用户开始新一首作品
+    daw = _state.get("daw")
+    if daw:
+        daw.unlock_project()
     return {"ok": True}
 
 

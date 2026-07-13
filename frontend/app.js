@@ -913,6 +913,7 @@ async function openSettingsModal() {
   await ensureProviderCatalog();
   // 先用本地缓存填充表单（即时），再用服务端实际值覆盖
   fillSettingsForm(loadLocalSettings());
+  refreshProjectLockStatus();
   try {
     const s = await (await fetch("/api/settings")).json();
     fillSettingsForm(s);
@@ -949,6 +950,71 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeSwitcher();
+});
+
+// ---------- 工程锚点管理：先打开一个工程，之后所有操作都锁定在这个工程里 ----------
+async function refreshProjectLockStatus() {
+  try {
+    const r = await fetch("/api/project/status");
+    const j = await r.json();
+    const box = $("#project-lock-status");
+    const dot = $("#lock-dot");
+    const txt = $("#lock-text");
+    if (!box || !dot || !txt) return;
+    if (j.locked) {
+      box.classList.add("locked");
+      txt.textContent = `工程已锁定：${j.title || ""}（${j.path || ""}）`;
+    } else {
+      box.classList.remove("locked");
+      txt.textContent = "工程未锁定（开始制作时会在作曲阶段自动创建并锁定）";
+    }
+  } catch (e) {}
+}
+
+$("#btn-open-project") && $("#btn-open-project").addEventListener("click", async () => {
+  const input = $("#project-open-path");
+  const path = (input.value || "").trim();
+  if (!path) {
+    addLog("warn", "请先填写 .logicx 工程文件路径", "log");
+    return;
+  }
+  const btn = $("#btn-open-project");
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = "打开中…";
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    const res = await fetch("/api/project/open", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    const j = await res.json();
+    if (j.ok) {
+      addLog("info", `已打开并锁定工程：${j.project_title}（${j.project_path}）`, "event");
+      refreshProjectLockStatus();
+    } else {
+      addLog("warn", `打开工程失败：${j.error || "未知错误"}`, "log");
+    }
+  } catch (e) {
+    const msg = (e && e.name === "AbortError") ? "打开工程超时" : `打开工程失败：${e}`;
+    addLog("warn", msg, "log");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+});
+
+$("#btn-reset-project") && $("#btn-reset-project").addEventListener("click", async () => {
+  try {
+    await fetch("/api/project/reset", { method: "POST" });
+    addLog("info", "已重置工程锚点，可开始新一首作品", "event");
+    refreshProjectLockStatus();
+  } catch (e) {
+    addLog("warn", `重置工程失败：${e}`, "log");
+  }
 });
 
 // 打开登录页按钮：在新标签页打开当前选中 AI 的网址

@@ -49,6 +49,10 @@ class DAWController:
         self.project_dir.mkdir(parents=True, exist_ok=True)
         self.current_project_path: Optional[str] = None  # .logicx 文件绝对路径
         self.current_project_title: str = ""
+        # 工程锁：一旦 create_project/open_existing_project 把工程设为锚点，
+        # 后续 create_project/new_project 全部被拒绝，所有修改操作都必须在锁定的工程内进行。
+        # 这是「先打开一个工程，之后所有操作都在这个工程里」的硬性保证。
+        self.project_locked: bool = False
 
     async def emit(self, **payload: Any):
         if self.event_cb:
@@ -65,20 +69,58 @@ class DAWController:
         """是否真正驱动 Logic Pro（而非模拟）。"""
         return self.use_applescript and self.applescript.available
 
+    @property
+    def has_project(self) -> bool:
+        """是否已锁定一个活动工程（所有修改操作的前提）。"""
+        return self.project_locked and bool(self.current_project_path)
+
+    def _require_project(self, op_desc: str) -> bool:
+        """修改操作前的守卫：必须已锁定一个工程才能执行。
+
+        Returns True 表示可以继续；False 表示无活动工程，调用方应跳过并告警。
+        """
+        return self.has_project
+
+    def _lock_project(self, path: str, title: str):
+        """记录工程锚点并加锁。已锁定时拒绝（防意外创建其他工程）。"""
+        if self.project_locked:
+            # 已有锁定工程，不允许切换——这是「防止意外创建其他工程」的硬保证
+            return False
+        self.current_project_path = path
+        self.current_project_title = title
+        self.project_locked = True
+        return True
+
+    def unlock_project(self):
+        """显式解锁（仅用于重置/取消任务后清空状态，正常制作流程不调用）。"""
+        self.project_locked = False
+        self.current_project_path = None
+        self.current_project_title = ""
+        self._track_index.clear()
+
     # ============== 工程 ==============
     async def create_project(self, tempo: TempoSpec, title: str = "AI Project"):
         """新建 Logic Pro 工程，并立即另存为到 project_dir 下的 .logicx 文件。
 
-        一首音乐的所有操作（作曲/编曲/混音/母带/导出）都指向这同一个工程文件。
+        严格规则：一首音乐的所有操作指向同一个工程文件。
+        - 若已有锁定工程（project_locked=True），拒绝新建并告警，防止意外创建其他工程。
+        - 新建成功后立即加锁，后续所有修改操作都必须在这个工程内进行。
         工程路径记录在 self.current_project_path，供阶段间引用与校验。
         """
         # 文件名安全化：去掉路径分隔符与非法字符
         safe_title = "".join(c for c in title if c not in '/\\:*?"<>|') or "AI Project"
         project_path = str(self.project_dir / f"{safe_title}.logicx")
-        self.current_project_path = project_path
-        self.current_project_title = title
+        # 锁校验：已有活动工程时，禁止再建——防止意外创建其他工程
+        if not self._lock_project(project_path, title):
+            await self.log(
+                "warn",
+                f"已拒绝新建工程「{title}」：当前已锁定工程「{self.current_project_title}」"
+                f"（{self.current_project_path}）。一首音乐的所有操作必须指向同一个工程，"
+                "禁止创建其他工程。如需新建，请先取消当前任务并重置工程。",
+            )
+            return False
 
-        await self.log("info", f"新建 Logic Pro 工程：{title}（{tempo.bpm}BPM）→ {project_path}")
+        await self.log("info", f"新建 Logic Pro 工程：{title}（{tempo.bpm}BPM）→ {project_path}（已锁定）")
         if self._real:
             self.applescript.new_project(name=title, bpm=tempo.bpm, key=tempo.key or "C")
             if tempo.time_signature:
@@ -86,14 +128,42 @@ class DAWController:
                 self.applescript.set_time_signature(int(num), int(den))
             # 立即另存为到磁盘，确保工程有确定路径，后续所有阶段都指向它
             self.applescript.save_as(project_path)
-            await self.log("info", f"工程已保存：{project_path}")
+            await self.log("info", f"工程已保存并锁定：{project_path}")
         else:
-            await self.log("warn", "非 macOS 或未启用 AppleScript，跳过实际建项目（模拟模式）。")
+            await self.log("warn", "非 macOS 或未启用 AppleScript，跳过实际建项目（模拟模式，工程锁仍生效）。")
         await self.emit(kind="project_created", title=title, bpm=tempo.bpm,
                         key=tempo.key, time_signature=tempo.time_signature,
-                        project_path=project_path)
+                        project_path=project_path, locked=True)
+        return True
+
+    async def open_existing_project(self, path: str) -> bool:
+        """打开一个已有的 .logicx 工程作为锚点（用户先打开工程后再开始制作）。
+
+        严格规则：若已有锁定工程，拒绝切换，防止意外切换到其他工程。
+        """
+        from pathlib import Path as _Path
+        p = _Path(path).expanduser()
+        if not p.exists() or p.suffix != ".logicx":
+            await self.log("error", f"工程文件不存在或非 .logicx：{path}")
+            return False
+        title = p.stem
+        if not self._lock_project(str(p), title):
+            await self.log(
+                "warn",
+                f"已拒绝打开工程「{path}」：当前已锁定工程「{self.current_project_title}」。"
+                "禁止在制作过程中切换工程。",
+            )
+            return False
+        await self.log("info", f"打开已有工程：{title}（{path}，已锁定）")
+        if self._real:
+            self.applescript.open_project(str(p))
+        await self.emit(kind="project_opened", title=title, project_path=str(p), locked=True)
+        return True
 
     async def save_project(self):
+        if not self._require_project("保存"):
+            await self.log("warn", "无活动工程，跳过保存。")
+            return
         await self.log("info", "保存工程")
         if self._real:
             self.applescript.save_project()
@@ -152,6 +222,9 @@ class DAWController:
 
     # ============== 轨道 ==============
     async def ensure_track(self, track: TrackSpec):
+        if not self._require_project("创建轨道"):
+            await self.log("warn", f"已跳过创建轨道「{track.name}」：无活动工程。请先在作曲阶段创建或打开一个工程。")
+            return
         if track.name in self._track_index:
             return
         self._track_index[track.name] = track
@@ -198,6 +271,9 @@ class DAWController:
 
     # ============== MIDI 区域 ==============
     async def add_region(self, region: MidiRegionSpec, bpm: float):
+        if not self._require_project("写入 MIDI 片段"):
+            await self.log("warn", f"已跳过写入 MIDI 片段到「{region.track}」：无活动工程。")
+            return
         await self.log("info", f"写入 MIDI 片段到轨道「{region.track}」，{len(region.notes)} 个音符")
         mid_path = self.midi.build_midi_file([region], TempoSpec(bpm=bpm))
         await self.emit(kind="midi_generated", track=region.track,
@@ -211,6 +287,9 @@ class DAWController:
 
     async def region_op(self, op: RegionOp):
         """执行片段编辑操作（切割/合并/移动/复制/删除/循环/量化/移调）。"""
+        if not self._require_project("片段操作"):
+            await self.log("warn", f"已跳过片段操作「{op.op}」：无活动工程。")
+            return
         op_labels = {
             "split": "切割", "join": "合并", "move": "移动", "copy": "复制",
             "delete": "删除", "loop": "循环", "resize": "调整长度",
@@ -250,6 +329,9 @@ class DAWController:
 
     # ============== 混音 ==============
     async def apply_mix(self, params: MixParams):
+        if not self._require_project("混音"):
+            await self.log("warn", f"已跳过混音「{params.track}」：无活动工程。")
+            return
         await self.log("info", f"混音：{params.track}（vol={params.volume_db} pan={params.pan}）")
         if self._real:
             if params.volume_db is not None:
@@ -279,6 +361,9 @@ class DAWController:
 
     async def create_bus(self, bus: BusSpec):
         """创建辅助通道/总线并挂插件。"""
+        if not self._require_project("创建总线"):
+            await self.log("warn", f"已跳过创建总线「{bus.name}」：无活动工程。")
+            return
         await self.log("info", f"创建总线「{bus.name}」（输入={bus.input or '-'}，{len(bus.plugins)} 个插件）")
         if self._real:
             self.applescript.create_aux_channel(bus.name, bus.input)
@@ -325,6 +410,9 @@ class DAWController:
 
     # ============== 母带 ==============
     async def apply_master(self, plugins: list[PluginSpec]):
+        if not self._require_project("母带"):
+            await self.log("warn", "已跳过母带处理：无活动工程。")
+            return
         await self.log("info", f"母带链：{[p.name for p in plugins]}")
         if self._real:
             self.applescript.select_master_track()
@@ -352,6 +440,9 @@ class DAWController:
 
     # ============== 导出 ==============
     async def bounce(self, bounce: BounceSpec) -> Path:
+        if not self._require_project("导出"):
+            await self.log("warn", "已跳过导出：无活动工程，无法 bounce。")
+            return None
         await self.log("info", f"开始导出（Bounce）：{bounce.filename}.{bounce.format}"
                                + ("（分轨）" if bounce.stems else ""))
         out = None
