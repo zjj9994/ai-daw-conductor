@@ -180,7 +180,7 @@ JSON 必须可被 python json.loads 直接解析，并严格符合给定的 sche
 - master_plugins: 母带插件链
 - master_spec: 出版级母带目标规范（LUFS/真峰/动态范围/多段/平台标准）
 - bounce: 导出（wav/mp3，可分轨 stems，可指定小节范围）
-- actions: UI/工程动作（save保存/undo撤销/open_piano_roll/open_mixer/zoom_fit 等）
+- actions: UI/工程动作（save保存/undo撤销/open_piano_roll/open_mixer/zoom_fit/dismiss_dialog关弹窗 等）
 
 出版级行业标准（必须遵守）：
 - 增益分级（Gain Staging）：每条轨道进入混音前峰值留 -6dB 余量，平均电平 -18~-12dBFS。

@@ -256,7 +256,7 @@ class UIAction(BaseModel):
     对象数组（[{"op":"open_piano_roll"}]）。这里用 model_validator(before) 自动
     把字符串转为 {"op": string}，避免校验失败导致整个步骤被丢弃。
     """
-    op: str = Field(description="save | undo | redo | open_piano_roll | open_mixer | open_inspector | zoom_fit | toggle_track | select_all | collapse_all（禁止 open/close/save_as）")
+    op: str = Field(description="save | undo | redo | open_piano_roll | open_mixer | open_inspector | zoom_fit | toggle_track | select_all | collapse_all | dismiss_dialog（禁止 open/close/save_as）")
     path: Optional[str] = Field(default=None, description="已弃用：工程路径由系统统一管理")
     track: Optional[str] = Field(default=None, description="toggle_track/select 用")
 

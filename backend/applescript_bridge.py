@@ -115,8 +115,123 @@ class AppleScriptBridge:
         except (asyncio.TimeoutError, Exception):
             return ""
 
-    def _send_key(self, key_expr: str, delay: float = 0.3):
-        """通过 System Events 给 Logic Pro 发送键命令。"""
+    # ---------- 弹窗处理 ----------
+    # Logic Pro 在多个关键路径会弹模态对话框（保存/打开/导入/导出/录音/插件缺失等），
+    # 一旦弹窗挡住主窗口，后续键命令会落到弹窗上而非 Logic Pro 主窗口，导致 AI 完全失控。
+    # 修复策略：每次发键命令前自动 dismiss 残留弹窗；关键路径(save_as/bounce)主动点确认。
+    def has_dialog(self) -> bool:
+        """检测 Logic Pro 当前是否有任何模态弹窗挡住主窗口。"""
+        if not self._available:
+            return False
+        # 检测两类弹窗：1)挂在 front window 的 sheet；2)独立的 AXDialog 窗口
+        out = self._run(
+            f'tell application "System Events"\n'
+            f'  tell process "{self.app_name}"\n'
+            f'    set sheetCount to 0\n'
+            f'    set dlgCount to 0\n'
+            f'    try\n'
+            f'      set sheetCount to count of sheets of front window\n'
+            f'    end try\n'
+            f'    try\n'
+            f'      set dlgCount to count of (every window whose subrole is "AXDialog")\n'
+            f'    end try\n'
+            f'    return (sheetCount + dlgCount) > 0\n'
+            f'  end tell\n'
+            f'end tell'
+        )
+        return out.strip().lower() == "true"
+
+    def dismiss_dialogs(self, action: str = "cancel", max_count: int = 5) -> int:
+        """关闭 Logic Pro 当前所有弹窗，返回成功关闭的弹窗数量。
+
+        action:
+          - "cancel"  : 优先点 Cancel/Don't Save（保守，避免误覆盖；用于键命令前置清场）
+          - "confirm" : 优先点 OK/Replace/Save 默认按钮（用于 save_as/bounce 等需确认覆盖的场景）
+          - "ok"      : 只点 OK 按钮（用于启动时的插件缺失等警告）
+        max_count: 最多关闭多少个弹窗，防止误关用户后续主动打开的对话框。
+        """
+        if not self._available:
+            return 0
+        # 按优先级尝试点击的按钮文本（action 决定顺序）
+        if action == "confirm":
+            btn_prefs = ["Replace", "OK", "Save", "Yes", "确认", "替换", "保存", "是"]
+        elif action == "ok":
+            btn_prefs = ["OK", "确定", "Continue", "继续"]
+        else:  # cancel
+            btn_prefs = ["Cancel", "Don't Save", "取消", "不保存", "No", "否"]
+        btn_list = "{" + ", ".join(f'"{b}"' for b in btn_prefs) + "}"
+        closed = 0
+        for _ in range(max_count):
+            # 每轮关一个弹窗（先 sheet 后 dialog），直到没有弹窗或达到上限
+            out = self._run(
+                f'tell application "System Events"\n'
+                f'  tell process "{self.app_name}"\n'
+                f'    set acted to false\n'
+                f'    -- 1. 先处理 front window 的 sheet\n'
+                f'    try\n'
+                f'      if (count of sheets of front window) > 0 then\n'
+                f'        set theSheet to sheet 1 of front window\n'
+                f'        repeat with btnName in {btn_list}\n'
+                f'          try\n'
+                f'            click button btnName of theSheet\n'
+                f'            set acted to true\n'
+                f'            exit repeat\n'
+                f'          end try\n'
+                f'        end repeat\n'
+                f'        -- 兜底：点 sheet 第 1 个按钮（通常是默认/确认）\n'
+                f'        if not acted then\n'
+                f'          try\n'
+                f'            click button 1 of theSheet\n'
+                f'            set acted to true\n'
+                f'          end try\n'
+                f'        end if\n'
+                f'      end if\n'
+                f'    end try\n'
+                f'    -- 2. 处理独立 AXDialog 窗口\n'
+                f'    if not acted then\n'
+                f'      try\n'
+                f'        set dlgWindows to (every window whose subrole is "AXDialog")\n'
+                f'        if (count of dlgWindows) > 0 then\n'
+                f'          set theDlg to item 1 of dlgWindows\n'
+                f'          repeat with btnName in {btn_list}\n'
+                f'            try\n'
+                f'              click button btnName of theDlg\n'
+                f'              set acted to true\n'
+                f'              exit repeat\n'
+                f'            end try\n'
+                f'          end repeat\n'
+                f'          if not acted then\n'
+                f'            try\n'
+                f'              click button 1 of theDlg\n'
+                f'              set acted to true\n'
+                f'            end try\n'
+                f'          end if\n'
+                f'        end if\n'
+                f'      end try\n'
+                f'    end if\n'
+                f'    if acted then\n'
+                f'      delay 0.3\n'
+                f'      return "1"\n'
+                f'    else\n'
+                f'      return "0"\n'
+                f'    end if\n'
+                f'  end tell\n'
+                f'end tell'
+            )
+            if out.strip() == "1":
+                closed += 1
+            else:
+                break
+        return closed
+
+    def _send_key(self, key_expr: str, delay: float = 0.3, auto_dismiss: bool = True):
+        """通过 System Events 给 Logic Pro 发送键命令。
+
+        auto_dismiss=True 时，发键前先 dismiss 残留弹窗（保守 cancel 模式），
+        防止键命令落到弹窗按钮上导致后续操作错乱。
+        """
+        if auto_dismiss:
+            self.dismiss_dialogs(action="cancel", max_count=3)
         self._run(
             f'tell application "System Events"\n'
             f'  tell process "{self.app_name}"\n'
@@ -127,8 +242,10 @@ class AppleScriptBridge:
             f'end tell'
         )
 
-    def _menu_click(self, menu_path: list[str], delay: float = 0.3):
+    def _menu_click(self, menu_path: list[str], delay: float = 0.3, auto_dismiss: bool = True):
         """点击菜单项，menu_path 如 ['File', 'Save As...']。"""
+        if auto_dismiss:
+            self.dismiss_dialogs(action="cancel", max_count=3)
         items = ", ".join(f'menu item "{m}"' for m in menu_path[1:])
         script = (
             f'tell application "System Events"\n'
@@ -150,6 +267,9 @@ class AppleScriptBridge:
             f'  tell application "{self.app_name}" to activate\n'
             f'end if'
         )
+        # 启动/激活时清场：关掉 Logic Pro 启动时常弹的「Missing Audio Units」
+        # 「无音频设备」「Core Audio 未就绪」等警告，用 ok 模式点确定。
+        self.dismiss_dialogs(action="ok", max_count=5)
 
     # ============== 工程 ==============
     def new_project(self, name: str = "AI Project", bpm: float = 100, key: str = "C"):
@@ -193,7 +313,10 @@ class AppleScriptBridge:
         self._send_key(KEY_COMMANDS["save"], delay=0.5)
 
     def save_as(self, path: str):
-        """另存为。path 为 .logicx 工程文件路径。"""
+        """另存为。path 为 .logicx 工程文件路径。
+
+        若文件已存在，Logic Pro 会弹「是否替换」对话框——这里主动点 Replace 确认覆盖。
+        """
         self._send_key(KEY_COMMANDS["save_as"], delay=0.8)
         # 在保存对话框输入路径
         self._run(
@@ -209,6 +332,8 @@ class AppleScriptBridge:
             f'  end tell\n'
             f'end tell'
         )
+        # 若弹出「文件已存在，是否替换」对话框，主动点 Replace 确认覆盖
+        self.dismiss_dialogs(action="confirm", max_count=2)
 
     def open_project(self, path: str):
         self._send_key(KEY_COMMANDS["open"], delay=0.5)
@@ -864,12 +989,17 @@ class AppleScriptBridge:
     async def bounce_master(self, filename: str, fmt: str = "wav", bit_depth: int = 24,
                             sample_rate: int = 44100, start_bar: Optional[int] = None,
                             end_bar: Optional[int] = None, normalize: bool = False) -> Path:
-        """Bounce 整个项目（母带输出）到 render_dir。"""
+        """Bounce 整个项目（母带输出）到 render_dir。
+
+        若输出文件已存在，Logic Pro 会弹「是否替换」对话框——这里主动点 Replace 确认覆盖。
+        """
         out = self.render_dir / f"{filename}.{fmt}"
         ext = {"wav": "WAVE", "aiff": "AIFF", "mp3": "MP3", "m4a": "AAC"}.get(fmt.lower(), "WAVE")
         # 可选：设置循环区域作为导出范围
         if start_bar and end_bar:
             self.set_cycle(start_bar, end_bar)
+        # 导出前先清残留弹窗，防止 bounce 命令落到弹窗上
+        self.dismiss_dialogs(action="cancel", max_count=3)
         await self._run_async(
             f'tell application "{self.app_name}"\n'
             f'  activate\n'
@@ -879,6 +1009,8 @@ class AppleScriptBridge:
             f'end tell',
             timeout=600,
         )
+        # 若弹出「文件已存在，是否替换」对话框，主动点 Replace 确认覆盖
+        self.dismiss_dialogs(action="confirm", max_count=2)
         return out
 
     async def bounce_stems(self, filename_prefix: str = "stem", fmt: str = "wav",
@@ -903,6 +1035,8 @@ class AppleScriptBridge:
             f'  end tell\n'
             f'end tell'
         )
+        # 若弹「文件已存在/是否替换」对话框，主动点 Replace 确认覆盖
+        self.dismiss_dialogs(action="confirm", max_count=5)
         # 返回目录下所有音频文件
         return sorted(self.render_dir.glob(f"*.{fmt}"))
 

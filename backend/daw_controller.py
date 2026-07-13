@@ -493,7 +493,7 @@ class DAWController:
             "undo": "撤销", "redo": "重做", "open_piano_roll": "打开钢琴卷帘",
             "open_mixer": "打开混音器", "open_inspector": "打开检查器",
             "zoom_fit": "缩放适配", "toggle_track": "切换轨道", "select_all": "全选",
-            "collapse_all": "折叠所有堆栈",
+            "collapse_all": "折叠所有堆栈", "dismiss_dialog": "关闭弹窗",
         }
         # 守卫：禁止切换/关闭工程，保证所有操作指向同一个工程
         if action.op in ("open", "close"):
@@ -534,9 +534,23 @@ class DAWController:
                 self.applescript.select_all_regions()
             elif action.op == "collapse_all":
                 self.applescript.collapse_all_track_stacks()
+            elif action.op == "dismiss_dialog":
+                # AI 主动清弹窗（截图看到弹窗时输出此动作）
+                closed = self.applescript.dismiss_dialogs(action="cancel", max_count=5)
+                await self.log("info", f"关闭弹窗：{closed} 个")
             elif action.op == "toggle_track" and action.track:
                 self.applescript.toggle_track_hide(action.track)
         await self.emit(kind="ui_action", op=action.op)
+
+    def dismiss_dialogs(self, action: str = "cancel", max_count: int = 5) -> int:
+        """主动关闭 Logic Pro 弹窗。
+
+        action: "cancel" | "confirm" | "ok"（详见 applescript_bridge.dismiss_dialogs）。
+        供 commander/AI 在截图发现弹窗时主动调用，避免弹窗挡住后续操作。
+        """
+        if not self._real:
+            return 0
+        return self.applescript.dismiss_dialogs(action=action, max_count=max_count)
 
     def close(self):
         self.midi.close()
